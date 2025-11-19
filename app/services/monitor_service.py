@@ -33,6 +33,9 @@ class MonitorService:
         count = 0
 
         try:
+            # Limpiar partidos antiguos (más de 1 día finalizados)
+            await self._cleanup_old_matches(db)
+            
             # Obtener TODOS los fixtures disponibles del día (sin filtrar por liga)
             print(f"🔄 Fetching all fixtures for {today}...")
             all_fixtures = await self.api_football.get_fixtures_by_date(today, league_id=None)
@@ -267,6 +270,36 @@ class MonitorService:
         except Exception as e:
             print(f"❌ Error sending alert: {e}")
             return False
+
+    async def _cleanup_old_matches(self, db: Session) -> int:
+        """
+        Delete finished matches older than 1 day.
+        
+        Args:
+            db: Database session
+            
+        Returns:
+            Number of matches deleted
+        """
+        try:
+            from datetime import timedelta
+            yesterday = datetime.now() - timedelta(days=1)
+            
+            # Borrar partidos finalizados de más de 1 día
+            deleted = db.query(Match).filter(
+                Match.match_date < yesterday,
+                Match.status.in_(["FT", "AET", "PEN", "CANC", "PST", "ABD", "AWD", "WO"])
+            ).delete(synchronize_session=False)
+            
+            if deleted > 0:
+                print(f"🗑️  Deleted {deleted} old matches")
+                db.commit()
+            
+            return deleted
+        except Exception as e:
+            print(f"⚠️  Error cleaning old matches: {e}")
+            db.rollback()
+            return 0
 
     def get_db(self) -> Session:
         """Get database session."""

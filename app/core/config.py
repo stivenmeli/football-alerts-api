@@ -12,9 +12,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        # En Railway, las variables vienen del sistema, no de archivo
-        env_file=".env" if os.path.exists(".env") else None,
-        env_file_encoding="utf-8",
+        # Priorizar variables de entorno del sistema (Railway)
         case_sensitive=True,
         extra="ignore",
     )

@@ -1,0 +1,15 @@
+# Archivos que Railway no necesita
+.venv/
+*.pyc
+__pycache__/
+*.db
+*.log
+.env
+.DS_Store
+tests/
+*.md
+keep_awake.sh
+check_status.sh
+football_alerts.db
+logs/
+

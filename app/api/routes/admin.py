@@ -8,6 +8,7 @@ from app.database import get_db
 from app.services.monitor_service import MonitorService
 from app.services.telegram_service import TelegramService
 from app.models import Match, League, Team
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -153,5 +154,24 @@ async def get_matches(
     return {
         "count": len(results),
         "matches": results
+    }
+
+
+@router.get("/env-check")
+async def check_environment() -> dict[str, Any]:
+    """Check environment variables configuration (for debugging)."""
+    token = settings.TELEGRAM_BOT_TOKEN
+    chat_id = settings.TELEGRAM_CHAT_ID
+    
+    # Ocultar parcialmente valores sensibles
+    token_preview = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else "EMPTY OR TOO SHORT"
+    
+    return {
+        "telegram_bot_token_length": len(token) if token else 0,
+        "telegram_bot_token_preview": token_preview,
+        "telegram_chat_id": chat_id,
+        "api_football_key_length": len(settings.API_FOOTBALL_KEY) if settings.API_FOOTBALL_KEY else 0,
+        "project_name": settings.PROJECT_NAME,
+        "leagues_to_monitor": settings.LEAGUES_TO_MONITOR,
     }
 

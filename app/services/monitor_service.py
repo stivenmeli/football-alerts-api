@@ -273,7 +273,7 @@ class MonitorService:
 
     async def _cleanup_old_matches(self, db: Session) -> int:
         """
-        Delete finished matches older than today.
+        Delete ALL matches from previous days (regardless of status).
         
         Args:
             db: Database session
@@ -285,14 +285,14 @@ class MonitorService:
             # Obtener el inicio del día de hoy
             today_start = datetime.combine(date.today(), datetime.min.time())
             
-            # Borrar partidos finalizados de días anteriores
+            # Borrar TODOS los partidos de días anteriores
+            # (incluye NS, FT, etc. - cualquier partido que no sea de hoy)
             deleted = db.query(Match).filter(
-                Match.match_date < today_start,
-                Match.status.in_(["FT", "AET", "PEN", "CANC", "PST", "ABD", "AWD", "WO"])
+                Match.match_date < today_start
             ).delete(synchronize_session=False)
             
             if deleted > 0:
-                print(f"🗑️  Deleted {deleted} old finished matches from previous days")
+                print(f"🗑️  Deleted {deleted} old matches from previous days")
                 db.commit()
             
             return deleted

@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     FAVORITE_ODDS_THRESHOLD: float = 1.35
     MONITOR_MINUTE_START: int = 55
     MONITOR_MINUTE_END: int = 62
-    UPDATE_INTERVAL_SECONDS: int = 60
+    UPDATE_INTERVAL_SECONDS: int = 180  # Check every 3 minutes (optimized for API limits)
     
     # Ligas (IDs de API-Football)
     # Premier: 39, La Liga: 140, Serie A: 135, Bundesliga: 78, Ligue 1: 61, Colombia: 239

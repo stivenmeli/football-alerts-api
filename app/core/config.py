@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     
     # The Odds API (for betting odds)
     THE_ODDS_API_KEY: str = ""
-    THE_ODDS_LEAGUES: str = "soccer_epl,soccer_spain_la_liga,soccer_italy_serie_a,soccer_germany_bundesliga,soccer_france_ligue_one"
+    THE_ODDS_LEAGUES: str = "soccer_epl,soccer_spain_la_liga,soccer_italy_serie_a,soccer_germany_bundesliga,soccer_france_ligue_one,soccer_brazil_campeonato,soccer_mexico_ligamx,soccer_argentina_primera_division,soccer_netherlands_eredivisie,soccer_efl_champ,soccer_conmebol_copa_libertadores"
     
     # Telegram
     TELEGRAM_BOT_TOKEN: str = ""

@@ -23,7 +23,7 @@ class MonitorService:
 
     async def fetch_and_store_fixtures(self, db: Session) -> int:
         """
-        Fetch fixtures for today and next 3 days and store them in database.
+        Fetch fixtures for TODAY only and store them in database.
         
         Args:
             db: Database session
@@ -31,29 +31,16 @@ class MonitorService:
         Returns:
             Number of fixtures processed
         """
-        from datetime import timedelta
-        
+        today = date.today().strftime("%Y-%m-%d")
         count = 0
 
         try:
-            # Limpiar partidos antiguos (más de 1 día finalizados)
+            # Limpiar partidos antiguos
             await self._cleanup_old_matches(db)
             
-            # Obtener fixtures de HOY y próximos 3 días (para tener cuotas disponibles)
-            today = date.today()
-            all_fixtures = []
-            
-            for days_ahead in range(4):  # Hoy + próximos 3 días
-                target_date = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-                print(f"🔄 Fetching all fixtures for {target_date}...")
-                
-                try:
-                    daily_fixtures = await self.api_football.get_fixtures_by_date(target_date, league_id=None)
-                    all_fixtures.extend(daily_fixtures)
-                    print(f"✅ Found {len(daily_fixtures)} fixtures for {target_date}")
-                except Exception as e:
-                    print(f"⚠️  Error fetching fixtures for {target_date}: {e}")
-                    continue
+            # Obtener TODOS los fixtures disponibles del día (sin filtrar por liga)
+            print(f"🔄 Fetching all fixtures for {today}...")
+            all_fixtures = await self.api_football.get_fixtures_by_date(today, league_id=None)
             
             print(f"✅ Found {len(all_fixtures)} fixtures available")
             
@@ -139,6 +126,9 @@ class MonitorService:
                 away_team_id=away_team.id,
                 match_date=match_date_obj,
                 status=parsed_data["status"],
+                # Mark all matches for monitoring (free version: monitor local team)
+                should_monitor=True,
+                favorite_team_id=home_team.id,  # Home team is considered "favorite"
             )
             db.add(match)
         else:
@@ -305,28 +295,27 @@ class MonitorService:
         return alerts_sent
 
     async def _send_alert(self, db: Session, match: Match) -> bool:
-        """Send Telegram alert for a match."""
+        """Send Telegram alert for a match (home team losing in critical minutes)."""
         try:
             # Get team names
             home_team = db.query(Team).filter(Team.id == match.home_team_id).first()
             away_team = db.query(Team).filter(Team.id == match.away_team_id).first()
             league = db.query(League).filter(League.id == match.league_id).first()
-            favorite_team = db.query(Team).filter(Team.id == match.favorite_team_id).first()
 
-            if not all([home_team, away_team, league, favorite_team]):
+            if not all([home_team, away_team, league]):
                 return False
 
-            # Send Telegram message
-            success = await self.telegram.send_match_alert(
-                home_team=home_team.name,
-                away_team=away_team.name,
-                league=league.name,
-                current_minute=match.current_minute or 0,
-                home_score=match.home_score or 0,
-                away_score=match.away_score or 0,
-                favorite_team=favorite_team.name,
-                favorite_odds=match.favorite_odds or 0,
+            # Send Telegram message for home team losing
+            message = (
+                f"🚨 ALERTA: Equipo Local Perdiendo\n\n"
+                f"⚽ {home_team.name} vs {away_team.name}\n"
+                f"🏆 {league.name}\n\n"
+                f"⏱️ Minuto: {match.current_minute or 0}'\n"
+                f"⚽ Resultado: {match.home_score or 0} - {match.away_score or 0}\n\n"
+                f"🏠 El equipo local está perdiendo en minuto crítico!"
             )
+            
+            success = await self.telegram.send_message(message)
 
             # Store notification record
             notification = Notification(

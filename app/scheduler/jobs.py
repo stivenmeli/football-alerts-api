@@ -68,15 +68,15 @@ def start_scheduler() -> None:
     )
     print("📅 Scheduled: Fetch fixtures daily at 8:00 AM")
 
-    # Job 2: Fetch odds once daily at 9:00 AM (from The Odds API)
-    scheduler.add_job(
-        fetch_odds_job,
-        trigger=CronTrigger(hour=9, minute=0),
-        id="fetch_odds",
-        name="Fetch match odds",
-        replace_existing=True,
-    )
-    print("📊 Scheduled: Fetch odds daily at 9:00 AM")
+    # Job 2: Fetch odds - DISABLED (Free version: no odds needed, home team is "favorite")
+    # scheduler.add_job(
+    #     fetch_odds_job,
+    #     trigger=CronTrigger(hour=9, minute=0),
+    #     id="fetch_odds",
+    #     name="Fetch match odds",
+    #     replace_existing=True,
+    # )
+    print("📊 Odds fetching: DISABLED (Free mode - home team monitoring)")
 
     # Job 3: Monitor live matches every minute
     scheduler.add_job(

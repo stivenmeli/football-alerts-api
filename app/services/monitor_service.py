@@ -23,7 +23,8 @@ class MonitorService:
 
     async def fetch_and_store_fixtures(self, db: Session) -> int:
         """
-        Fetch fixtures for TODAY only and store them in database.
+        Fetch fixtures WITH ODDS from The Odds API and store them in database.
+        Uses The Odds API as primary source since it has upcoming matches with odds.
         
         Args:
             db: Database session
@@ -31,35 +32,37 @@ class MonitorService:
         Returns:
             Number of fixtures processed
         """
-        today = date.today().strftime("%Y-%m-%d")
         count = 0
 
         try:
             # Limpiar partidos antiguos
             await self._cleanup_old_matches(db)
             
-            # Obtener TODOS los fixtures disponibles del día (sin filtrar por liga)
-            print(f"🔄 Fetching all fixtures for {today}...")
-            all_fixtures = await self.api_football.get_fixtures_by_date(today, league_id=None)
+            # Obtener partidos CON cuotas desde The Odds API
+            print(f"🔄 Fetching matches with odds from The Odds API...")
+            all_odds = await self.odds_api.get_odds_for_soccer()
             
-            print(f"✅ Found {len(all_fixtures)} fixtures available")
+            print(f"✅ Found {len(all_odds)} matches with odds")
             
-            for fixture_data in all_fixtures:
+            alerts_sent = 0
+            
+            for odds_match in all_odds:
                 try:
-                    parsed = self.api_football.parse_fixture(fixture_data)
-                    
-                    # Opcional: Filtrar solo las ligas que nos interesan
-                    # league_id = parsed["league"]["api_id"]
-                    # if league_id not in settings.leagues_to_monitor_list:
-                    #     continue
-                    
-                    await self._store_fixture(db, parsed)
-                    count += 1
+                    # Store fixture from The Odds API data
+                    success = await self._store_fixture_from_odds(db, odds_match)
+                    if success:
+                        count += 1
+                        
+                        # Check if we should send low odds alert
+                        parsed_odds = self.odds_api.parse_odds(odds_match)
+                        if parsed_odds and parsed_odds.get("favorite_odds", 999) < settings.FAVORITE_ODDS_THRESHOLD:
+                            alerts_sent += 1
+                            
                 except Exception as e:
-                    print(f"⚠️  Error processing fixture: {e}")
+                    print(f"⚠️  Error processing odds match: {e}")
                     continue
             
-            print(f"✅ Stored {count} fixtures in database")
+            print(f"✅ Stored {count} fixtures with odds, sent {alerts_sent} alerts")
             
         except Exception as e:
             print(f"❌ Error fetching fixtures: {e}")
@@ -67,8 +70,113 @@ class MonitorService:
         db.commit()
         return count
 
+    async def _store_fixture_from_odds(self, db: Session, odds_match: dict[str, Any]) -> bool:
+        """
+        Store fixture from The Odds API data.
+        
+        Args:
+            db: Database session
+            odds_match: Match data from The Odds API with odds
+            
+        Returns:
+            True if stored successfully
+        """
+        try:
+            home_team_name = odds_match.get("home_team", "").strip()
+            away_team_name = odds_match.get("away_team", "").strip()
+            league_key = odds_match.get("league_key", "unknown")
+            commence_time = odds_match.get("commence_time")
+            
+            # Parse odds
+            parsed_odds = self.odds_api.parse_odds(odds_match)
+            if not parsed_odds:
+                return False
+            
+            # Get or create league (using league_key as identifier)
+            league = db.query(League).filter(League.name == league_key).first()
+            if not league:
+                league = League(
+                    api_id=hash(league_key) % 1000000,  # Generate pseudo ID
+                    name=league_key,
+                    country="Unknown",
+                    season=datetime.now().year,
+                )
+                db.add(league)
+                db.flush()
+            
+            # Get or create home team
+            home_team = db.query(Team).filter(Team.name == home_team_name).first()
+            if not home_team:
+                home_team = Team(
+                    api_id=hash(home_team_name) % 1000000,
+                    name=home_team_name,
+                )
+                db.add(home_team)
+                db.flush()
+            
+            # Get or create away team
+            away_team = db.query(Team).filter(Team.name == away_team_name).first()
+            if not away_team:
+                away_team = Team(
+                    api_id=hash(away_team_name) % 1000000,
+                    name=away_team_name,
+                )
+                db.add(away_team)
+                db.flush()
+            
+            # Parse match date
+            match_date_obj = datetime.fromisoformat(commence_time.replace('Z', '+00:00')).replace(tzinfo=None)
+            
+            # Check if match already exists
+            match = db.query(Match).filter(
+                Match.home_team_id == home_team.id,
+                Match.away_team_id == away_team.id,
+                Match.match_date >= match_date_obj.replace(hour=0, minute=0),
+                Match.match_date < match_date_obj.replace(hour=23, minute=59),
+            ).first()
+            
+            if not match:
+                # Determine favorite
+                favorite_team_id = home_team.id if parsed_odds["favorite_team"] == "home" else away_team.id
+                should_monitor = parsed_odds["favorite_odds"] < settings.FAVORITE_ODDS_THRESHOLD
+                
+                match = Match(
+                    api_id=hash(f"{home_team_name}{away_team_name}{commence_time}") % 1000000,
+                    league_id=league.id,
+                    home_team_id=home_team.id,
+                    away_team_id=away_team.id,
+                    match_date=match_date_obj,
+                    status="NS",  # Not Started
+                    home_odds=parsed_odds.get("home_odds"),
+                    draw_odds=parsed_odds.get("draw_odds"),
+                    away_odds=parsed_odds.get("away_odds"),
+                    favorite_team_id=favorite_team_id,
+                    favorite_odds=parsed_odds.get("favorite_odds"),
+                    should_monitor=should_monitor,
+                )
+                db.add(match)
+                db.flush()
+                
+                # Send alert if odds < threshold
+                if should_monitor and not match.notification_sent:
+                    await self._send_low_odds_alert(db, match, home_team, away_team)
+                
+                print(f"✅ Stored: {home_team_name} vs {away_team_name} (odds: {parsed_odds['favorite_odds']:.2f})")
+                return True
+            else:
+                # Update existing match odds
+                match.home_odds = parsed_odds.get("home_odds")
+                match.draw_odds = parsed_odds.get("draw_odds")
+                match.away_odds = parsed_odds.get("away_odds")
+                match.favorite_odds = parsed_odds.get("favorite_odds")
+                return True
+                
+        except Exception as e:
+            print(f"⚠️  Error storing fixture from odds: {e}")
+            return False
+
     async def _store_fixture(self, db: Session, parsed_data: dict[str, Any]) -> None:
-        """Store or update fixture in database."""
+        """Store or update fixture in database (from API-Football)."""
         # Get or create league
         league_data = parsed_data["league"]
         league = db.query(League).filter(League.api_id == league_data["api_id"]).first()

@@ -58,25 +58,16 @@ def start_scheduler() -> None:
     """Start the scheduler with all jobs."""
     print("🚀 Starting scheduler...")
 
-    # Job 1: Fetch fixtures daily at 8:00 AM
+    # Job 1: Fetch fixtures with odds daily at 9:00 AM (from The Odds API)
+    # The Odds API is now the primary source - it provides both fixtures and odds
     scheduler.add_job(
         fetch_fixtures_job,
-        trigger=CronTrigger(hour=8, minute=0),
+        trigger=CronTrigger(hour=9, minute=0),
         id="fetch_fixtures",
-        name="Fetch daily fixtures",
+        name="Fetch daily fixtures with odds",
         replace_existing=True,
     )
-    print("📅 Scheduled: Fetch fixtures daily at 8:00 AM")
-
-    # Job 2: Fetch odds - DISABLED (Free version: no odds needed, home team is "favorite")
-    # scheduler.add_job(
-    #     fetch_odds_job,
-    #     trigger=CronTrigger(hour=9, minute=0),
-    #     id="fetch_odds",
-    #     name="Fetch match odds",
-    #     replace_existing=True,
-    # )
-    print("📊 Odds fetching: DISABLED (Free mode - home team monitoring)")
+    print("📅 Scheduled: Fetch fixtures with odds daily at 9:00 AM")
 
     # Job 3: Monitor live matches every minute
     scheduler.add_job(

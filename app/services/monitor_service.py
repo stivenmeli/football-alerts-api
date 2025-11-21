@@ -23,8 +23,8 @@ class MonitorService:
 
     async def fetch_and_store_fixtures(self, db: Session) -> int:
         """
-        Fetch TODAY's fixtures WITH ODDS from The Odds API and store them in database.
-        Only stores matches happening today (no pre-match alerts, only for live monitoring).
+        Fetch fixtures WITH ODDS from The Odds API in the next 20 hours.
+        Only stores matches starting in next 20 hours (no pre-match alerts, only for live monitoring).
         
         Args:
             db: Database session
@@ -44,13 +44,13 @@ class MonitorService:
             
             print(f"✅ Found {len(all_odds)} matches with odds")
             
-            # Filter only matches starting in the next 12 hours
+            # Filter only matches starting in the next 20 hours
             from datetime import timedelta, timezone
             
             # Get current time in UTC
             now_utc = datetime.now(timezone.utc)
-            # Define window: next 12 hours
-            window_end = now_utc + timedelta(hours=12)
+            # Define window: next 20 hours
+            window_end = now_utc + timedelta(hours=20)
             
             today_matches = []
             
@@ -61,11 +61,11 @@ class MonitorService:
                         # Parse UTC time
                         match_datetime_utc = datetime.fromisoformat(commence_time_str.replace('Z', '+00:00'))
                         
-                        # Check if match starts within next 12 hours
+                        # Check if match starts within next 20 hours
                         if now_utc <= match_datetime_utc <= window_end:
                             today_matches.append(odds_match)
                             hours_until = (match_datetime_utc - now_utc).total_seconds() / 3600
-                            print(f"  ✅ Match in next 12h: {odds_match.get('home_team')} vs {odds_match.get('away_team')} (in {hours_until:.1f}h)")
+                            print(f"  ✅ Match in next 20h: {odds_match.get('home_team')} vs {odds_match.get('away_team')} (in {hours_until:.1f}h)")
                         else:
                             hours_until = (match_datetime_utc - now_utc).total_seconds() / 3600
                             print(f"  ⏭️  Match outside window: {odds_match.get('home_team')} (in {hours_until:.1f}h)")
@@ -73,7 +73,7 @@ class MonitorService:
                     print(f"  ⚠️  Error parsing date: {e}")
                     continue
             
-            print(f"✅ Found {len(today_matches)} matches TODAY")
+            print(f"✅ Found {len(today_matches)} matches in next 20 hours")
             
             for odds_match in today_matches:
                 try:
@@ -86,7 +86,7 @@ class MonitorService:
                     print(f"⚠️  Error processing odds match: {e}")
                     continue
             
-            print(f"✅ Stored {count} fixtures with odds for TODAY")
+            print(f"✅ Stored {count} fixtures with odds (next 20 hours)")
             
         except Exception as e:
             print(f"❌ Error fetching fixtures: {e}")

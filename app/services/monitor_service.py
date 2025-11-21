@@ -23,8 +23,8 @@ class MonitorService:
 
     async def fetch_and_store_fixtures(self, db: Session) -> int:
         """
-        Fetch fixtures WITH ODDS from The Odds API and store them in database.
-        Uses The Odds API as primary source since it has upcoming matches with odds.
+        Fetch TODAY's fixtures WITH ODDS from The Odds API and store them in database.
+        Only stores matches happening today (no pre-match alerts, only for live monitoring).
         
         Args:
             db: Database session
@@ -44,25 +44,34 @@ class MonitorService:
             
             print(f"✅ Found {len(all_odds)} matches with odds")
             
-            alerts_sent = 0
+            # Filter only TODAY's matches
+            today = date.today()
+            today_matches = []
             
             for odds_match in all_odds:
                 try:
-                    # Store fixture from The Odds API data
-                    success = await self._store_fixture_from_odds(db, odds_match)
+                    commence_time = odds_match.get("commence_time")
+                    if commence_time:
+                        match_date = datetime.fromisoformat(commence_time.replace('Z', '+00:00')).date()
+                        if match_date == today:
+                            today_matches.append(odds_match)
+                except Exception as e:
+                    continue
+            
+            print(f"✅ Found {len(today_matches)} matches TODAY")
+            
+            for odds_match in today_matches:
+                try:
+                    # Store fixture from The Odds API data (NO pre-match alerts)
+                    success = await self._store_fixture_from_odds(db, odds_match, send_alert=False)
                     if success:
                         count += 1
-                        
-                        # Check if we should send low odds alert
-                        parsed_odds = self.odds_api.parse_odds(odds_match)
-                        if parsed_odds and parsed_odds.get("favorite_odds", 999) < settings.FAVORITE_ODDS_THRESHOLD:
-                            alerts_sent += 1
                             
                 except Exception as e:
                     print(f"⚠️  Error processing odds match: {e}")
                     continue
             
-            print(f"✅ Stored {count} fixtures with odds, sent {alerts_sent} alerts")
+            print(f"✅ Stored {count} fixtures with odds for TODAY")
             
         except Exception as e:
             print(f"❌ Error fetching fixtures: {e}")
@@ -70,13 +79,14 @@ class MonitorService:
         db.commit()
         return count
 
-    async def _store_fixture_from_odds(self, db: Session, odds_match: dict[str, Any]) -> bool:
+    async def _store_fixture_from_odds(self, db: Session, odds_match: dict[str, Any], send_alert: bool = False) -> bool:
         """
         Store fixture from The Odds API data.
         
         Args:
             db: Database session
             odds_match: Match data from The Odds API with odds
+            send_alert: Whether to send pre-match alert (default: False)
             
         Returns:
             True if stored successfully
@@ -157,8 +167,8 @@ class MonitorService:
                 db.add(match)
                 db.flush()
                 
-                # Send alert if odds < threshold
-                if should_monitor and not match.notification_sent:
+                # Send alert if odds < threshold (only if send_alert=True)
+                if send_alert and should_monitor and not match.notification_sent:
                     await self._send_low_odds_alert(db, match, home_team, away_team)
                 
                 print(f"✅ Stored: {home_team_name} vs {away_team_name} (odds: {parsed_odds['favorite_odds']:.2f})")
@@ -403,24 +413,27 @@ class MonitorService:
         return alerts_sent
 
     async def _send_alert(self, db: Session, match: Match) -> bool:
-        """Send Telegram alert for a match (home team losing in critical minutes)."""
+        """Send Telegram alert for a match (favorite losing in critical minutes 52-65)."""
         try:
             # Get team names
             home_team = db.query(Team).filter(Team.id == match.home_team_id).first()
             away_team = db.query(Team).filter(Team.id == match.away_team_id).first()
             league = db.query(League).filter(League.id == match.league_id).first()
+            favorite_team = db.query(Team).filter(Team.id == match.favorite_team_id).first()
 
-            if not all([home_team, away_team, league]):
+            if not all([home_team, away_team, league, favorite_team]):
                 return False
 
-            # Send Telegram message for home team losing
+            # Send Telegram message for favorite losing
             message = (
-                f"🚨 ALERTA: Equipo Local Perdiendo\n\n"
+                f"🚨 ALERTA: Favorito Perdiendo (minutos 52-65)\n\n"
                 f"⚽ {home_team.name} vs {away_team.name}\n"
                 f"🏆 {league.name}\n\n"
+                f"🎯 Favorito: {favorite_team.name}\n"
+                f"💰 Cuota pre-partido: {match.favorite_odds:.2f}\n"
                 f"⏱️ Minuto: {match.current_minute or 0}'\n"
                 f"⚽ Resultado: {match.home_score or 0} - {match.away_score or 0}\n\n"
-                f"🏠 El equipo local está perdiendo en minuto crítico!"
+                f"📊 El favorito está perdiendo en momento crítico!"
             )
             
             success = await self.telegram.send_message(message)

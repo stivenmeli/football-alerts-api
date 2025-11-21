@@ -49,8 +49,8 @@ class Settings(BaseSettings):
     
     # Monitoring settings
     FAVORITE_ODDS_THRESHOLD: float = 1.35
-    MONITOR_MINUTE_START: int = 55
-    MONITOR_MINUTE_END: int = 62
+    MONITOR_MINUTE_START: int = 52
+    MONITOR_MINUTE_END: int = 65
     UPDATE_INTERVAL_SECONDS: int = 180  # Check every 3 minutes (optimized for API limits)
     
     # Ligas (IDs de API-Football)

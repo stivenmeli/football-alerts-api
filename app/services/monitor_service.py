@@ -174,16 +174,31 @@ class MonitorService:
             # Process each match with odds
             for odds_match in all_odds:
                 try:
-                    home_team_name = odds_match.get("home_team", "")
-                    away_team_name = odds_match.get("away_team", "")
+                    home_team_name = odds_match.get("home_team", "").strip()
+                    away_team_name = odds_match.get("away_team", "").strip()
                     
-                    # Find matching fixture in our database by team names
-                    # Note: This is a fuzzy match - might need adjustment
-                    home_team = db.query(Team).filter(Team.name.ilike(f"%{home_team_name}%")).first()
-                    away_team = db.query(Team).filter(Team.name.ilike(f"%{away_team_name}%")).first()
+                    # Normalize team names for better matching
+                    # Remove common suffixes like "FC", "F.C.", "United", etc.
+                    home_norm = home_team_name.replace(" FC", "").replace(" F.C.", "").strip()
+                    away_norm = away_team_name.replace(" FC", "").replace(" F.C.", "").strip()
+                    
+                    # Try exact match first, then partial match
+                    home_team = (
+                        db.query(Team).filter(Team.name == home_team_name).first() or
+                        db.query(Team).filter(Team.name == home_norm).first() or
+                        db.query(Team).filter(Team.name.ilike(f"%{home_norm}%")).first()
+                    )
+                    away_team = (
+                        db.query(Team).filter(Team.name == away_team_name).first() or
+                        db.query(Team).filter(Team.name == away_norm).first() or
+                        db.query(Team).filter(Team.name.ilike(f"%{away_norm}%")).first()
+                    )
                     
                     if not home_team or not away_team:
+                        print(f"⚠️  Could not match teams: {home_team_name} vs {away_team_name}")
                         continue
+                    
+                    print(f"✅ Matched: {home_team.name} vs {away_team.name}")
                     
                     # Find the match
                     match = db.query(Match).filter(

@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     API_FOOTBALL_HOST: str = "v3.football.api-sports.io"
     API_FOOTBALL_BASE_URL: str = "https://v3.football.api-sports.io"
     
+    # The Odds API (for betting odds)
+    THE_ODDS_API_KEY: str = ""
+    THE_ODDS_LEAGUES: str = "soccer_epl,soccer_spain_la_liga,soccer_italy_serie_a,soccer_germany_bundesliga,soccer_france_ligue_one"
+    
     # Telegram
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
@@ -66,6 +70,13 @@ class Settings(BaseSettings):
         if isinstance(self.LEAGUES_TO_MONITOR, str):
             return [int(league_id.strip()) for league_id in self.LEAGUES_TO_MONITOR.split(",")]
         return self.LEAGUES_TO_MONITOR
+    
+    @property
+    def the_odds_leagues_list(self) -> list[str]:
+        """Get THE_ODDS_LEAGUES as a list of strings."""
+        if isinstance(self.THE_ODDS_LEAGUES, str):
+            return [league.strip() for league in self.THE_ODDS_LEAGUES.split(",")]
+        return self.THE_ODDS_LEAGUES
 
 
 @lru_cache

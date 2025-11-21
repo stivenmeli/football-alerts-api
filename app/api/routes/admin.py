@@ -190,3 +190,29 @@ async def check_environment() -> dict[str, Any]:
         }
     }
 
+
+@router.get("/test-odds-api")
+async def test_odds_api() -> dict[str, Any]:
+    """Test connection to The Odds API."""
+    from app.services.the_odds_api_service import TheOddsAPIService
+    
+    odds_service = TheOddsAPIService()
+    result = await odds_service.test_connection()
+    
+    # Try to get some sample odds
+    try:
+        sample_odds = await odds_service.get_odds_for_soccer(leagues=["soccer_epl"], regions="eu", markets="h2h")
+        result["sample_matches_count"] = len(sample_odds)
+        if sample_odds:
+            first_match = sample_odds[0]
+            result["sample_match"] = {
+                "home_team": first_match.get("home_team"),
+                "away_team": first_match.get("away_team"),
+                "commence_time": first_match.get("commence_time"),
+                "bookmakers_count": len(first_match.get("bookmakers", []))
+            }
+    except Exception as e:
+        result["sample_error"] = str(e)
+    
+    return result
+

@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.database import SessionLocal
 from app.models import Match, League, Team, Notification
 from app.services.api_football import APIFootballService
+from app.services.the_odds_api_service import TheOddsAPIService
 from app.services.telegram_service import TelegramService
 
 
@@ -17,6 +18,7 @@ class MonitorService:
     def __init__(self) -> None:
         """Initialize monitoring service."""
         self.api_football = APIFootballService()
+        self.odds_api = TheOddsAPIService()
         self.telegram = TelegramService()
 
     async def fetch_and_store_fixtures(self, db: Session) -> int:
@@ -136,7 +138,7 @@ class MonitorService:
 
     async def fetch_and_store_odds(self, db: Session) -> int:
         """
-        Fetch odds for matches without odds and determine favorites.
+        Fetch odds from The Odds API for today's matches and determine favorites.
         
         Args:
             db: Database session
@@ -144,43 +146,84 @@ class MonitorService:
         Returns:
             Number of matches processed
         """
-        # Get matches without odds that haven't started yet
-        matches = db.query(Match).filter(
-            Match.home_odds.is_(None),
-            Match.status == "NS",
-        ).all()
-
-        count = 0
-        for match in matches:
-            try:
-                odds_data = await self.api_football.get_odds(match.api_id)
-                if odds_data:
-                    odds = self.api_football.parse_odds(odds_data)
-                    if odds:
-                        match.home_odds = odds.get("home")
-                        match.draw_odds = odds.get("draw")
-                        match.away_odds = odds.get("away")
-
-                        # Determine favorite
-                        if match.home_odds and match.away_odds:
-                            if match.home_odds < match.away_odds:
-                                match.favorite_team_id = match.home_team_id
-                                match.favorite_odds = match.home_odds
-                            else:
-                                match.favorite_team_id = match.away_team_id
-                                match.favorite_odds = match.away_odds
-
-                            # Mark for monitoring if favorite odds < threshold
-                            if match.favorite_odds < settings.FAVORITE_ODDS_THRESHOLD:
-                                match.should_monitor = True
-                                print(f"🎯 Match {match.api_id} marked for monitoring (odds: {match.favorite_odds})")
-
-                        count += 1
-            except Exception as e:
-                print(f"❌ Error fetching odds for match {match.api_id}: {e}")
-
-        db.commit()
-        return count
+        try:
+            # Fetch odds from The Odds API for all configured leagues
+            print("🔍 Fetching odds from The Odds API...")
+            all_odds = await self.odds_api.get_odds_for_soccer()
+            
+            if not all_odds:
+                print("⚠️  No odds found from The Odds API")
+                return 0
+            
+            count = 0
+            alerts_sent = 0
+            
+            # Process each match with odds
+            for odds_match in all_odds:
+                try:
+                    home_team_name = odds_match.get("home_team", "")
+                    away_team_name = odds_match.get("away_team", "")
+                    
+                    # Find matching fixture in our database by team names
+                    # Note: This is a fuzzy match - might need adjustment
+                    home_team = db.query(Team).filter(Team.name.ilike(f"%{home_team_name}%")).first()
+                    away_team = db.query(Team).filter(Team.name.ilike(f"%{away_team_name}%")).first()
+                    
+                    if not home_team or not away_team:
+                        continue
+                    
+                    # Find the match
+                    match = db.query(Match).filter(
+                        Match.home_team_id == home_team.id,
+                        Match.away_team_id == away_team.id,
+                        Match.status == "NS"
+                    ).first()
+                    
+                    if not match:
+                        continue
+                    
+                    # Parse odds
+                    parsed_odds = self.odds_api.parse_odds(odds_match)
+                    if not parsed_odds:
+                        continue
+                    
+                    # Store odds
+                    match.home_odds = parsed_odds.get("home_odds")
+                    match.draw_odds = parsed_odds.get("draw_odds")
+                    match.away_odds = parsed_odds.get("away_odds")
+                    match.favorite_odds = parsed_odds.get("favorite_odds")
+                    
+                    # Determine favorite team ID
+                    if parsed_odds["favorite_team"] == "home":
+                        match.favorite_team_id = home_team.id
+                    else:
+                        match.favorite_team_id = away_team.id
+                    
+                    # Check if favorite odds < threshold and send alert
+                    if match.favorite_odds and match.favorite_odds < settings.FAVORITE_ODDS_THRESHOLD:
+                        match.should_monitor = True
+                        print(f"🎯 Match marked for monitoring: {home_team.name} vs {away_team.name} (odds: {match.favorite_odds})")
+                        
+                        # Send Telegram alert for low odds
+                        if not match.notification_sent:
+                            success = await self._send_low_odds_alert(db, match, home_team, away_team)
+                            if success:
+                                alerts_sent += 1
+                    
+                    count += 1
+                    
+                except Exception as e:
+                    print(f"⚠️  Error processing odds for {odds_match.get('home_team')} vs {odds_match.get('away_team')}: {e}")
+                    continue
+            
+            db.commit()
+            print(f"✅ Processed {count} matches with odds, sent {alerts_sent} alerts")
+            return count
+            
+        except Exception as e:
+            print(f"❌ Error fetching odds: {e}")
+            db.rollback()
+            return 0
 
     async def monitor_live_matches(self, db: Session) -> int:
         """
@@ -269,6 +312,46 @@ class MonitorService:
 
         except Exception as e:
             print(f"❌ Error sending alert: {e}")
+            return False
+
+    async def _send_low_odds_alert(self, db: Session, match: Match, home_team: Team, away_team: Team) -> bool:
+        """Send Telegram alert for low pre-match odds."""
+        try:
+            league = db.query(League).filter(League.id == match.league_id).first()
+            favorite_team = db.query(Team).filter(Team.id == match.favorite_team_id).first()
+
+            if not all([league, favorite_team]):
+                return False
+
+            # Format match date/time
+            match_time = match.match_date.strftime("%H:%M") if match.match_date else "TBD"
+
+            # Send Telegram message for low odds
+            message = (
+                f"🚨 ALERTA: Cuota Pre-Partido Baja\n\n"
+                f"⚽ {home_team.name} vs {away_team.name}\n"
+                f"🏆 {league.name}\n\n"
+                f"🎯 Favorito: {favorite_team.name}\n"
+                f"💰 Cuota: {match.favorite_odds:.2f}\n"
+                f"⏰ Inicio: {match_time}\n"
+            )
+            
+            success = await self.telegram.send_message(message)
+
+            # Store notification record
+            if success:
+                match.notification_sent = True
+                notification = Notification(
+                    match_id=match.id,
+                    message=f"Low odds alert: {home_team.name} vs {away_team.name} ({match.favorite_odds})",
+                    status="sent",
+                )
+                db.add(notification)
+
+            return success
+
+        except Exception as e:
+            print(f"❌ Error sending low odds alert: {e}")
             return False
 
     async def _cleanup_old_matches(self, db: Session) -> int:

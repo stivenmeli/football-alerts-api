@@ -23,7 +23,7 @@ class MonitorService:
 
     async def fetch_and_store_fixtures(self, db: Session) -> int:
         """
-        Fetch fixtures for today and store them in database.
+        Fetch fixtures for today and next 3 days and store them in database.
         
         Args:
             db: Database session
@@ -31,16 +31,29 @@ class MonitorService:
         Returns:
             Number of fixtures processed
         """
-        today = date.today().strftime("%Y-%m-%d")
+        from datetime import timedelta
+        
         count = 0
 
         try:
             # Limpiar partidos antiguos (más de 1 día finalizados)
             await self._cleanup_old_matches(db)
             
-            # Obtener TODOS los fixtures disponibles del día (sin filtrar por liga)
-            print(f"🔄 Fetching all fixtures for {today}...")
-            all_fixtures = await self.api_football.get_fixtures_by_date(today, league_id=None)
+            # Obtener fixtures de HOY y próximos 3 días (para tener cuotas disponibles)
+            today = date.today()
+            all_fixtures = []
+            
+            for days_ahead in range(4):  # Hoy + próximos 3 días
+                target_date = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+                print(f"🔄 Fetching all fixtures for {target_date}...")
+                
+                try:
+                    daily_fixtures = await self.api_football.get_fixtures_by_date(target_date, league_id=None)
+                    all_fixtures.extend(daily_fixtures)
+                    print(f"✅ Found {len(daily_fixtures)} fixtures for {target_date}")
+                except Exception as e:
+                    print(f"⚠️  Error fetching fixtures for {target_date}: {e}")
+                    continue
             
             print(f"✅ Found {len(all_fixtures)} fixtures available")
             
@@ -356,7 +369,7 @@ class MonitorService:
 
     async def _cleanup_old_matches(self, db: Session) -> int:
         """
-        Delete ALL matches from previous days (regardless of status).
+        Delete matches from previous days (keeps today + next 3 days).
         
         Args:
             db: Database session
@@ -368,8 +381,7 @@ class MonitorService:
             # Obtener el inicio del día de hoy
             today_start = datetime.combine(date.today(), datetime.min.time())
             
-            # Borrar TODOS los partidos de días anteriores
-            # (incluye NS, FT, etc. - cualquier partido que no sea de hoy)
+            # Borrar partidos de días anteriores a hoy
             deleted = db.query(Match).filter(
                 Match.match_date < today_start
             ).delete(synchronize_session=False)

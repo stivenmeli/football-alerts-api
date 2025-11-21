@@ -44,19 +44,13 @@ class MonitorService:
             
             print(f"✅ Found {len(all_odds)} matches with odds")
             
-            # Filter only TODAY's matches (in server's local timezone)
+            # Filter only matches starting in the next 12 hours
             from datetime import timedelta, timezone
             
-            # Get current time in UTC and local
+            # Get current time in UTC
             now_utc = datetime.now(timezone.utc)
-            now_local = datetime.now()
-            
-            # Calculate timezone offset
-            utc_offset = now_local - now_utc.replace(tzinfo=None)
-            
-            # Define TODAY's range in local time
-            today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-            today_end = today_start + timedelta(days=1)
+            # Define window: next 12 hours
+            window_end = now_utc + timedelta(hours=12)
             
             today_matches = []
             
@@ -66,15 +60,15 @@ class MonitorService:
                     if commence_time_str:
                         # Parse UTC time
                         match_datetime_utc = datetime.fromisoformat(commence_time_str.replace('Z', '+00:00'))
-                        # Convert to local time
-                        match_datetime_local = match_datetime_utc.replace(tzinfo=None) + utc_offset
                         
-                        # Check if match is TODAY in local time
-                        if today_start <= match_datetime_local < today_end:
+                        # Check if match starts within next 12 hours
+                        if now_utc <= match_datetime_utc <= window_end:
                             today_matches.append(odds_match)
-                            print(f"  ✅ Match TODAY: {odds_match.get('home_team')} vs {odds_match.get('away_team')} at {match_datetime_local.strftime('%H:%M')}")
+                            hours_until = (match_datetime_utc - now_utc).total_seconds() / 3600
+                            print(f"  ✅ Match in next 12h: {odds_match.get('home_team')} vs {odds_match.get('away_team')} (in {hours_until:.1f}h)")
                         else:
-                            print(f"  ⏭️  Match NOT today: {odds_match.get('home_team')} ({match_datetime_local.strftime('%Y-%m-%d %H:%M')})")
+                            hours_until = (match_datetime_utc - now_utc).total_seconds() / 3600
+                            print(f"  ⏭️  Match outside window: {odds_match.get('home_team')} (in {hours_until:.1f}h)")
                 except Exception as e:
                     print(f"  ⚠️  Error parsing date: {e}")
                     continue

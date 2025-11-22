@@ -76,6 +76,7 @@ class MonitorService:
             print(f"✅ Found {len(today_matches)} matches in next 20 hours")
             
             # Pre-fetch all API-Football fixtures for today to get real IDs (single API call)
+            # If API-Football is out of quota, we'll still store matches and try to get IDs during monitoring
             api_football_fixtures = {}
             try:
                 today_str = date.today().strftime("%Y-%m-%d")
@@ -93,7 +94,8 @@ class MonitorService:
                         
                 print(f"✅ Indexed {len(api_football_fixtures)} API-Football fixtures")
             except Exception as e:
-                print(f"⚠️  Could not fetch API-Football fixtures: {e}")
+                print(f"⚠️  Could not fetch API-Football fixtures (may be out of quota): {e}")
+                print(f"⚠️  Will store matches anyway and try to get IDs during monitoring")
             
             for odds_match in today_matches:
                 try:

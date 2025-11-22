@@ -75,6 +75,26 @@ class MonitorService:
             
             print(f"✅ Found {len(today_matches)} matches in next 20 hours")
             
+            # Pre-fetch all API-Football fixtures for today to get real IDs (single API call)
+            api_football_fixtures = {}
+            try:
+                today_str = date.today().strftime("%Y-%m-%d")
+                print(f"🔄 Fetching API-Football fixtures for today to get real IDs...")
+                api_fixtures_list = await self.api_football.get_fixtures_by_date(today_str, league_id=None)
+                
+                # Index by team names for quick lookup
+                for fixture in api_fixtures_list:
+                    try:
+                        parsed = self.api_football.parse_fixture(fixture)
+                        key = f"{parsed['home_team']['name'].lower()}_{parsed['away_team']['name'].lower()}"
+                        api_football_fixtures[key] = parsed["api_id"]
+                    except:
+                        continue
+                        
+                print(f"✅ Indexed {len(api_football_fixtures)} API-Football fixtures")
+            except Exception as e:
+                print(f"⚠️  Could not fetch API-Football fixtures: {e}")
+            
             for odds_match in today_matches:
                 try:
                     # Store fixture from The Odds API data (NO pre-match alerts)
@@ -152,6 +172,25 @@ class MonitorService:
             # Parse match date
             match_date_obj = datetime.fromisoformat(commence_time.replace('Z', '+00:00')).replace(tzinfo=None)
             
+            # Try to find real API-Football ID from pre-loaded fixtures
+            real_api_id = None
+            lookup_key = f"{home_team_name.lower()}_{away_team_name.lower()}"
+            
+            # Try exact match first
+            if lookup_key in api_football_fixtures:
+                real_api_id = api_football_fixtures[lookup_key]
+                print(f"  ✅ Found API-Football ID: {real_api_id}")
+            else:
+                # Try fuzzy match
+                for key, api_id in api_football_fixtures.items():
+                    if home_team_name.lower() in key and away_team_name.lower() in key:
+                        real_api_id = api_id
+                        print(f"  ✅ Found API-Football ID (fuzzy): {real_api_id}")
+                        break
+                        
+            if not real_api_id:
+                print(f"  ⚠️  No API-Football ID found for {home_team_name} vs {away_team_name}")
+            
             # Check if match already exists
             match = db.query(Match).filter(
                 Match.home_team_id == home_team.id,
@@ -165,8 +204,11 @@ class MonitorService:
                 favorite_team_id = home_team.id if parsed_odds["favorite_team"] == "home" else away_team.id
                 should_monitor = parsed_odds["favorite_odds"] < settings.FAVORITE_ODDS_THRESHOLD
                 
+                # Use real API-Football ID if found, otherwise use hash
+                api_id = real_api_id if real_api_id else hash(f"{home_team_name}{away_team_name}{commence_time}") % 1000000
+                
                 match = Match(
-                    api_id=hash(f"{home_team_name}{away_team_name}{commence_time}") % 1000000,
+                    api_id=api_id,
                     league_id=league.id,
                     home_team_id=home_team.id,
                     away_team_id=away_team.id,
@@ -379,25 +421,40 @@ class MonitorService:
     async def monitor_live_matches(self, db: Session) -> int:
         """
         Monitor live matches and send alerts when conditions are met.
+        Updates status of all matches marked for monitoring, then checks conditions.
         
         Args:
-            db: Database session
+            db: Session
             
         Returns:
             Number of alerts sent
         """
-        # Get matches that should be monitored and haven't been notified yet
+        # Get ALL matches that should be monitored and haven't been notified yet
+        # Include NS (not started) to update their status
         matches = db.query(Match).filter(
             Match.should_monitor == True,  # noqa: E712
             Match.notification_sent == False,  # noqa: E712
-            Match.status.in_(["1H", "2H"]),
         ).all()
 
         alerts_sent = 0
 
         for match in matches:
             try:
-                # Fetch live data
+                # Try to update match status from API-Football
+                # First, try by searching with team names since we may not have correct api_id
+                home_team = db.query(Team).filter(Team.id == match.home_team_id).first()
+                away_team = db.query(Team).filter(Team.id == match.away_team_id).first()
+                
+                if not home_team or not away_team:
+                    continue
+                
+                # Skip if we don't have a valid api_id from API-Football
+                # Hash-generated IDs are typically > 500000
+                if match.api_id > 500000:  # Likely hash-generated ID, not real API-Football ID
+                    print(f"⚠️  Skipping {home_team.name} vs {away_team.name} - no API-Football ID (ID: {match.api_id})")
+                    continue
+                
+                # Fetch live data from API-Football
                 live_data = await self.api_football.get_fixture_by_id(match.api_id)
                 if not live_data:
                     continue
@@ -410,9 +467,11 @@ class MonitorService:
                 match.home_score = parsed.get("home_score") or 0
                 match.away_score = parsed.get("away_score") or 0
                 match.updated_at = datetime.utcnow()
+                
+                print(f"📊 Updated: {home_team.name} vs {away_team.name} | Status: {match.status} | Min: {match.current_minute} | Score: {match.home_score}-{match.away_score}")
 
-                # Check if conditions are met
-                if match.is_in_monitoring_window and match.is_favorite_losing:
+                # Check if match is live (1H or 2H) and conditions are met
+                if match.status in ["1H", "2H"] and match.is_in_monitoring_window and match.is_favorite_losing:
                     # Send alert
                     success = await self._send_alert(db, match)
                     if success:

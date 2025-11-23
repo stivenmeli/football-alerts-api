@@ -195,6 +195,7 @@ async def check_environment() -> dict[str, Any]:
 async def test_odds_api() -> dict[str, Any]:
     """Test connection to The Odds API."""
     from app.services.the_odds_api_service import TheOddsAPIService
+    from datetime import datetime, timezone, timedelta
     
     odds_service = TheOddsAPIService()
     result = await odds_service.test_connection()
@@ -203,16 +204,117 @@ async def test_odds_api() -> dict[str, Any]:
     try:
         sample_odds = await odds_service.get_odds_for_soccer(leagues=["soccer_epl"], regions="eu", markets="h2h")
         result["sample_matches_count"] = len(sample_odds)
-        if sample_odds:
-            first_match = sample_odds[0]
-            result["sample_match"] = {
-                "home_team": first_match.get("home_team"),
-                "away_team": first_match.get("away_team"),
-                "commence_time": first_match.get("commence_time"),
-                "bookmakers_count": len(first_match.get("bookmakers", []))
-            }
+        
+        # Check 20 hour window
+        now_utc = datetime.now(timezone.utc)
+        window_end = now_utc + timedelta(hours=20)
+        
+        in_window = []
+        for match in sample_odds:
+            commence_time_str = match.get("commence_time")
+            if commence_time_str:
+                match_dt = datetime.fromisoformat(commence_time_str.replace('Z', '+00:00'))
+                if now_utc <= match_dt <= window_end:
+                    hours_until = (match_dt - now_utc).total_seconds() / 3600
+                    in_window.append({
+                        "home": match.get("home_team"),
+                        "away": match.get("away_team"),
+                        "hours_until": round(hours_until, 1)
+                    })
+        
+        result["in_20h_window"] = len(in_window)
+        result["sample_in_window"] = in_window[:3] if in_window else []
+        result["current_time_utc"] = now_utc.isoformat()
+        result["window_end_utc"] = window_end.isoformat()
+        
     except Exception as e:
         result["sample_error"] = str(e)
     
     return result
+
+
+@router.get("/debug-fixtures")
+async def debug_fixtures() -> dict[str, Any]:
+    """Detailed debug of fixture fetching process."""
+    from app.services.the_odds_api_service import TheOddsAPIService
+    from datetime import datetime, timezone, timedelta
+    
+    odds_service = TheOddsAPIService()
+    now_utc = datetime.now(timezone.utc)
+    window_end = now_utc + timedelta(hours=20)
+    
+    debug_info = {
+        "current_time_utc": now_utc.isoformat(),
+        "window_end_utc": window_end.isoformat(),
+        "leagues_configured": settings.THE_ODDS_LEAGUES,
+        "leagues_by_key": {}
+    }
+    
+    # Check each league
+    leagues = settings.THE_ODDS_LEAGUES.split(",")
+    total_in_window = 0
+    total_with_low_odds = 0
+    
+    for league_key in leagues:
+        try:
+            matches = await odds_service.get_odds(league_key.strip(), regions="eu", markets="h2h")
+            if not matches:
+                debug_info["leagues_by_key"][league_key] = {"error": "No matches returned"}
+                continue
+                
+            in_window = 0
+            low_odds = 0
+            sample_matches = []
+            
+            for match in matches:
+                commence_time_str = match.get("commence_time")
+                if not commence_time_str:
+                    continue
+                    
+                match_dt = datetime.fromisoformat(commence_time_str.replace('Z', '+00:00'))
+                
+                # Check if in window
+                if now_utc <= match_dt <= window_end:
+                    in_window += 1
+                    
+                    # Get minimum odd
+                    min_odd = 999
+                    if match.get("bookmakers"):
+                        for bookmaker in match["bookmakers"]:
+                            for market in bookmaker.get("markets", []):
+                                if market["key"] == "h2h":
+                                    for outcome in market.get("outcomes", []):
+                                        min_odd = min(min_odd, outcome.get("price", 999))
+                    
+                    if min_odd < 1.35:
+                        low_odds += 1
+                        
+                    if len(sample_matches) < 2:
+                        hours_until = (match_dt - now_utc).total_seconds() / 3600
+                        sample_matches.append({
+                            "home": match.get("home_team"),
+                            "away": match.get("away_team"),
+                            "hours_until": round(hours_until, 1),
+                            "min_odd": round(min_odd, 2) if min_odd < 999 else None
+                        })
+            
+            total_in_window += in_window
+            total_with_low_odds += low_odds
+            
+            debug_info["leagues_by_key"][league_key] = {
+                "total_matches": len(matches),
+                "in_20h_window": in_window,
+                "with_low_odds": low_odds,
+                "sample_matches": sample_matches
+            }
+            
+        except Exception as e:
+            debug_info["leagues_by_key"][league_key] = {"error": str(e)}
+    
+    debug_info["summary"] = {
+        "total_in_window": total_in_window,
+        "total_with_low_odds": total_with_low_odds
+    }
+    
+    return debug_info
 

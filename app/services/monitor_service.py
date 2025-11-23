@@ -75,22 +75,31 @@ class MonitorService:
             
             print(f"✅ Found {len(today_matches)} matches in next 20 hours")
             
-            # Pre-fetch all API-Football fixtures for today to get real IDs (single API call)
+            # Pre-fetch all API-Football fixtures for today and tomorrow to get real IDs
             # If API-Football is out of quota, we'll still store matches and try to get IDs during monitoring
             api_football_fixtures = {}
             try:
-                today_str = date.today().strftime("%Y-%m-%d")
-                print(f"🔄 Fetching API-Football fixtures for today to get real IDs...")
-                api_fixtures_list = await self.api_football.get_fixtures_by_date(today_str, league_id=None)
+                # Fetch today's and tomorrow's fixtures to cover the 20-hour window
+                today_str = now_utc.strftime("%Y-%m-%d")
+                tomorrow_str = (now_utc + timedelta(days=1)).strftime("%Y-%m-%d")
                 
-                # Index by team names for quick lookup
-                for fixture in api_fixtures_list:
+                print(f"🔄 Fetching API-Football fixtures for {today_str} and {tomorrow_str} to get real IDs...")
+                
+                # Fetch both days
+                for date_str in [today_str, tomorrow_str]:
                     try:
-                        parsed = self.api_football.parse_fixture(fixture)
-                        key = f"{parsed['home_team']['name'].lower()}_{parsed['away_team']['name'].lower()}"
-                        api_football_fixtures[key] = parsed["api_id"]
-                    except:
-                        continue
+                        api_fixtures_list = await self.api_football.get_fixtures_by_date(date_str, league_id=None)
+                        
+                        # Index by team names for quick lookup
+                        for fixture in api_fixtures_list:
+                            try:
+                                parsed = self.api_football.parse_fixture(fixture)
+                                key = f"{parsed['home_team']['name'].lower()}_{parsed['away_team']['name'].lower()}"
+                                api_football_fixtures[key] = parsed["api_id"]
+                            except:
+                                continue
+                    except Exception as e:
+                        print(f"⚠️  Error fetching {date_str}: {e}")
                         
                 print(f"✅ Indexed {len(api_football_fixtures)} API-Football fixtures")
             except Exception as e:

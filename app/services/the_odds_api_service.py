@@ -137,34 +137,51 @@ class TheOddsAPIService:
     def parse_odds(self, odds_data: dict[str, Any]) -> dict[str, Any] | None:
         """
         Parse odds data from The Odds API.
+        Find the BEST (lowest) odds across all bookmakers.
         
         Args:
             odds_data: Raw odds data
             
         Returns:
-            Parsed odds with home, away, draw
+            Parsed odds with home, away, draw (using best odds available)
         """
         try:
             if not odds_data.get("bookmakers"):
                 return None
             
-            # Get the first bookmaker's odds
-            bookmaker = odds_data["bookmakers"][0]
-            markets = bookmaker.get("markets", [])
+            # Initialize with high values
+            home_odds = float('inf')
+            away_odds = float('inf')
+            draw_odds = float('inf')
+            best_bookmaker = None
             
-            # Find h2h market
-            h2h_market = next((m for m in markets if m["key"] == "h2h"), None)
-            if not h2h_market:
-                return None
+            # Iterate through ALL bookmakers to find the best (lowest) odds
+            for bookmaker in odds_data["bookmakers"]:
+                markets = bookmaker.get("markets", [])
+                
+                # Find h2h market
+                h2h_market = next((m for m in markets if m["key"] == "h2h"), None)
+                if not h2h_market:
+                    continue
+                
+                outcomes = h2h_market.get("outcomes", [])
+                
+                # Extract odds from this bookmaker
+                curr_home = next((o["price"] for o in outcomes if o["name"] == odds_data["home_team"]), None)
+                curr_away = next((o["price"] for o in outcomes if o["name"] == odds_data["away_team"]), None)
+                curr_draw = next((o["price"] for o in outcomes if o["name"] == "Draw"), None)
+                
+                # Update if this bookmaker has better (lower) odds
+                if curr_home and curr_home < home_odds:
+                    home_odds = curr_home
+                    best_bookmaker = bookmaker.get("title", "Unknown")
+                if curr_away and curr_away < away_odds:
+                    away_odds = curr_away
+                if curr_draw and curr_draw < draw_odds:
+                    draw_odds = curr_draw
             
-            outcomes = h2h_market.get("outcomes", [])
-            
-            # Extract odds
-            home_odds = next((o["price"] for o in outcomes if o["name"] == odds_data["home_team"]), None)
-            away_odds = next((o["price"] for o in outcomes if o["name"] == odds_data["away_team"]), None)
-            draw_odds = next((o["price"] for o in outcomes if o["name"] == "Draw"), None)
-            
-            if not home_odds or not away_odds:
+            # Check if we found valid odds
+            if home_odds == float('inf') or away_odds == float('inf'):
                 return None
             
             # Determine favorite (lowest odds)
@@ -178,10 +195,10 @@ class TheOddsAPIService:
             return {
                 "home_odds": home_odds,
                 "away_odds": away_odds,
-                "draw_odds": draw_odds,
+                "draw_odds": draw_odds if draw_odds != float('inf') else None,
                 "favorite_team": favorite_team,
                 "favorite_odds": favorite_odds,
-                "bookmaker": bookmaker.get("title", "Unknown"),
+                "bookmaker": best_bookmaker,
             }
             
         except Exception as e:

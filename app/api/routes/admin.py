@@ -233,6 +233,57 @@ async def test_odds_api() -> dict[str, Any]:
     return result
 
 
+@router.get("/debug-fetch-detailed")
+async def debug_fetch_detailed() -> dict[str, Any]:
+    """Simulate fetch_and_store_fixtures with detailed logging."""
+    from app.services.the_odds_api_service import TheOddsAPIService
+    from datetime import datetime, timezone, timedelta
+    
+    odds_service = TheOddsAPIService()
+    now_utc = datetime.now(timezone.utc)
+    window_end = now_utc + timedelta(hours=20)
+    
+    result = {
+        "current_time_utc": now_utc.isoformat(),
+        "window_end_utc": window_end.isoformat(),
+        "steps": []
+    }
+    
+    # Step 1: Fetch from The Odds API
+    result["steps"].append({"step": 1, "action": "Fetching from The Odds API..."})
+    all_odds = await odds_service.get_odds_for_soccer()
+    result["total_fetched"] = len(all_odds)
+    
+    # Step 2: Filter by window
+    today_matches = []
+    for odds_match in all_odds:
+        commence_time_str = odds_match.get("commence_time")
+        if commence_time_str:
+            match_datetime_utc = datetime.fromisoformat(commence_time_str.replace('Z', '+00:00'))
+            if now_utc <= match_datetime_utc <= window_end:
+                today_matches.append(odds_match)
+    
+    result["in_window"] = len(today_matches)
+    result["steps"].append({"step": 2, "action": f"Filtered to {len(today_matches)} matches in window"})
+    
+    # Step 3: Parse odds for each
+    parsed_results = []
+    for match in today_matches[:5]:  # Only first 5 for brevity
+        parsed_odds = odds_service.parse_odds(match)
+        parsed_results.append({
+            "home": match.get("home_team"),
+            "away": match.get("away_team"),
+            "league": match.get("league_key"),
+            "parsed_odds": parsed_odds,
+            "should_monitor": parsed_odds and parsed_odds.get("favorite_odds", 999) < float(settings.FAVORITE_ODDS_THRESHOLD) if parsed_odds else False
+        })
+    
+    result["sample_parsed"] = parsed_results
+    result["steps"].append({"step": 3, "action": f"Parsed {len(parsed_results)} sample matches"})
+    
+    return result
+
+
 @router.get("/debug-fixtures")
 async def debug_fixtures() -> dict[str, Any]:
     """Detailed debug of fixture fetching process."""

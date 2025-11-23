@@ -257,7 +257,7 @@ async def debug_fixtures() -> dict[str, Any]:
     
     for league_key in leagues:
         try:
-            matches = await odds_service.get_odds(league_key.strip(), regions="eu", markets="h2h")
+            matches = await odds_service.get_odds_for_soccer(leagues=[league_key.strip()], regions="eu", markets="h2h")
             if not matches:
                 debug_info["leagues_by_key"][league_key] = {"error": "No matches returned"}
                 continue

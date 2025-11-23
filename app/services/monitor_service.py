@@ -109,7 +109,7 @@ class MonitorService:
             for odds_match in today_matches:
                 try:
                     # Store fixture from The Odds API data (NO pre-match alerts)
-                    success = await self._store_fixture_from_odds(db, odds_match, send_alert=False)
+                    success = await self._store_fixture_from_odds(db, odds_match, api_football_fixtures, send_alert=False)
                     if success:
                         count += 1
                             
@@ -125,13 +125,14 @@ class MonitorService:
         db.commit()
         return count
 
-    async def _store_fixture_from_odds(self, db: Session, odds_match: dict[str, Any], send_alert: bool = False) -> bool:
+    async def _store_fixture_from_odds(self, db: Session, odds_match: dict[str, Any], api_football_fixtures: dict[str, int], send_alert: bool = False) -> bool:
         """
         Store fixture from The Odds API data.
         
         Args:
             db: Database session
             odds_match: Match data from The Odds API with odds
+            api_football_fixtures: Dict mapping team names to API-Football IDs
             send_alert: Whether to send pre-match alert (default: False)
             
         Returns:

@@ -433,7 +433,7 @@ class MonitorService:
     async def monitor_live_matches(self, db: Session) -> int:
         """
         Monitor live matches and send alerts when conditions are met.
-        Updates status of all matches marked for monitoring, then checks conditions.
+        Uses The Odds API for live scores (more reliable than API-Football free tier).
         
         Args:
             db: Session
@@ -442,60 +442,100 @@ class MonitorService:
             Number of alerts sent
         """
         # Get ALL matches that should be monitored and haven't been notified yet
-        # Include NS (not started) to update their status
         matches = db.query(Match).filter(
             Match.should_monitor == True,  # noqa: E712
             Match.notification_sent == False,  # noqa: E712
         ).all()
 
+        if not matches:
+            print("✅ No matches to monitor")
+            return 0
+
+        print(f"👁️  Monitoring {len(matches)} matches...")
+        
+        # Fetch live scores from The Odds API (all leagues at once)
+        print("🔄 Fetching live scores from The Odds API...")
+        live_scores = await self.odds_api.get_all_live_scores()
+        print(f"✅ Found {len(live_scores)} live matches in The Odds API")
+        
         alerts_sent = 0
 
         for match in matches:
             try:
-                # Try to update match status from API-Football
-                # First, try by searching with team names since we may not have correct api_id
                 home_team = db.query(Team).filter(Team.id == match.home_team_id).first()
                 away_team = db.query(Team).filter(Team.id == match.away_team_id).first()
                 
                 if not home_team or not away_team:
                     continue
                 
-                # Skip if we don't have a valid api_id from API-Football
-                # Hash-generated IDs are typically > 500000
-                if match.api_id > 500000:  # Likely hash-generated ID, not real API-Football ID
-                    print(f"⚠️  Skipping {home_team.name} vs {away_team.name} - no API-Football ID (ID: {match.api_id})")
+                print(f"🔍 Checking: {home_team.name} vs {away_team.name}")
+                
+                # Find this match in live scores by team names
+                live_match = None
+                for score in live_scores:
+                    score_home = score.get("home_team", "").lower()
+                    score_away = score.get("away_team", "").lower()
+                    match_home = home_team.name.lower()
+                    match_away = away_team.name.lower()
+                    
+                    # Flexible matching (handles variations like "Real Madrid" vs "Real Madrid CF")
+                    if (match_home in score_home or score_home in match_home) and \
+                       (match_away in score_away or score_away in match_away):
+                        live_match = score
+                        break
+                
+                if not live_match:
+                    print(f"  ⏭️  Not live yet: {home_team.name} vs {away_team.name}")
                     continue
                 
-                # Fetch live data from API-Football
-                live_data = await self.api_football.get_fixture_by_id(match.api_id)
-                if not live_data:
-                    continue
-
-                parsed = self.api_football.parse_fixture(live_data)
+                # Parse live score data
+                parsed_score = self.odds_api.parse_live_score(live_match)
                 
-                # Update match data
-                match.status = parsed["status"]
-                match.current_minute = parsed.get("current_minute")
-                match.home_score = parsed.get("home_score") or 0
-                match.away_score = parsed.get("away_score") or 0
+                if not parsed_score:
+                    print(f"  ⚠️  Could not parse score for {home_team.name} vs {away_team.name}")
+                    continue
+                
+                # Update match data with live info
+                match.home_score = parsed_score["home_score"]
+                match.away_score = parsed_score["away_score"]
+                match.status = "LIVE" if not parsed_score["completed"] else "FT"
+                
+                # Estimate minute (The Odds API doesn't provide exact minute)
+                # We'll assume if match has scores, it's between minutes 1-90
+                from datetime import datetime, timezone
+                commence_time_str = parsed_score.get("commence_time")
+                if commence_time_str:
+                    commence_time = datetime.fromisoformat(commence_time_str.replace('Z', '+00:00'))
+                    now = datetime.now(timezone.utc)
+                    elapsed_minutes = int((now - commence_time).total_seconds() / 60)
+                    # Cap at 90 minutes
+                    match.current_minute = min(elapsed_minutes, 90) if elapsed_minutes > 0 else None
+                
                 match.updated_at = datetime.utcnow()
                 
-                print(f"📊 Updated: {home_team.name} vs {away_team.name} | Status: {match.status} | Min: {match.current_minute} | Score: {match.home_score}-{match.away_score}")
+                print(f"  📊 LIVE: {home_team.name} {match.home_score}-{match.away_score} {away_team.name} | Min: {match.current_minute}")
 
-                # Check if match is live (1H or 2H) and conditions are met
-                if match.status in ["1H", "2H"] and match.is_in_monitoring_window and match.is_favorite_losing:
+                # Check monitoring conditions
+                if match.is_in_monitoring_window and match.is_favorite_losing:
+                    print(f"  🚨 CONDITIONS MET! Sending alert...")
                     # Send alert
                     success = await self._send_alert(db, match)
                     if success:
                         match.notification_sent = True
                         match.notified_at = datetime.utcnow()
                         alerts_sent += 1
-                        print(f"🚨 Alert sent for match {match.api_id}")
+                        print(f"  ✅ Alert sent!")
+                else:
+                    if match.current_minute:
+                        in_window = match.is_in_monitoring_window
+                        is_losing = match.is_favorite_losing
+                        print(f"  ℹ️  Not alerting: In window={in_window}, Losing={is_losing}")
 
             except Exception as e:
                 print(f"❌ Error monitoring match {match.api_id}: {e}")
 
         db.commit()
+        print(f"✅ Monitoring complete. Alerts sent: {alerts_sent}")
         return alerts_sent
 
     async def _send_alert(self, db: Session, match: Match) -> bool:

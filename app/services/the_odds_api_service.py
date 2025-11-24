@@ -15,6 +15,7 @@ class TheOddsAPIService:
         self.base_url = "https://api.the-odds-api.com/v4"
         self.api_key = settings.THE_ODDS_API_KEY
         self.timeout = 30.0
+        self.the_odds_leagues_list = settings.the_odds_leagues_list
 
     async def _make_request(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """
@@ -114,6 +115,95 @@ class TheOddsAPIService:
             print(f"❌ Error fetching odds: {e}")
             return []
 
+    async def get_live_scores(self, sport_key: str = "soccer_spain_la_liga") -> list[dict[str, Any]]:
+        """
+        Get live scores for a specific sport/league.
+        
+        Args:
+            sport_key: League key (e.g., "soccer_spain_la_liga")
+            
+        Returns:
+            List of live matches with scores
+        """
+        try:
+            # The Odds API provides scores in the same endpoint as odds
+            params = {
+                "regions": "eu",
+                "markets": "h2h",
+                "oddsFormat": "decimal",
+            }
+            
+            matches = await self._make_request(f"sports/{sport_key}/scores", params)
+            return matches if isinstance(matches, list) else []
+            
+        except Exception as e:
+            print(f"⚠️  Error fetching live scores for {sport_key}: {e}")
+            return []
+    
+    async def get_all_live_scores(self) -> list[dict[str, Any]]:
+        """
+        Get live scores from all configured leagues.
+        
+        Returns:
+            List of all live matches with scores
+        """
+        all_scores = []
+        leagues = self.the_odds_leagues_list
+        
+        for league_key in leagues:
+            try:
+                scores = await self.get_live_scores(league_key)
+                if scores:
+                    for score in scores:
+                        score["league_key"] = league_key
+                    all_scores.extend(scores)
+            except Exception as e:
+                print(f"⚠️  Error fetching scores from {league_key}: {e}")
+                continue
+        
+        return all_scores
+    
+    def parse_live_score(self, score_data: dict[str, Any]) -> dict[str, Any] | None:
+        """
+        Parse live score data from The Odds API.
+        
+        Args:
+            score_data: Raw score data
+            
+        Returns:
+            Parsed match data with scores and status
+        """
+        try:
+            # Check if match has started
+            if not score_data.get("completed") and score_data.get("scores"):
+                scores = score_data.get("scores", [])
+                
+                # Extract home and away scores
+                home_score = None
+                away_score = None
+                
+                for score in scores:
+                    if score.get("name") == score_data.get("home_team"):
+                        home_score = score.get("score")
+                    elif score.get("name") == score_data.get("away_team"):
+                        away_score = score.get("score")
+                
+                return {
+                    "home_team": score_data.get("home_team"),
+                    "away_team": score_data.get("away_team"),
+                    "home_score": int(home_score) if home_score else 0,
+                    "away_score": int(away_score) if away_score else 0,
+                    "completed": score_data.get("completed", False),
+                    "commence_time": score_data.get("commence_time"),
+                    "league_key": score_data.get("league_key"),
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"⚠️  Error parsing live score: {e}")
+            return None
+    
     async def test_connection(self) -> dict[str, Any]:
         """
         Test connection to The Odds API.

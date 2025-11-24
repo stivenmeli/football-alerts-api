@@ -40,7 +40,7 @@ class MonitorService:
             
             # TEMPORARY MODE: Use API-Football directly (The Odds API out of quota)
             print(f"⚠️  TEMPORARY MODE: Fetching from API-Football (no odds filter)")
-            print(f"   Will monitor ALL matches - home team losing in minutes 52-65")
+            print(f"   Will monitor ALL matches - BOTH teams (home & away) in minutes 52-65")
             
             # Try The Odds API first, fallback to API-Football
             all_odds = []
@@ -231,8 +231,9 @@ class MonitorService:
             ).first()
             
             if not match:
-                # TEMPORARY MODE: Consider HOME team as favorite, monitor ALL matches
-                match = Match(
+                # TEMPORARY MODE: Monitor BOTH teams (create 2 records per match)
+                # Record 1: HOME as favorite
+                match_home = Match(
                     api_id=parsed_fixture["api_id"],
                     league_id=league.id,
                     home_team_id=home_team.id,
@@ -240,14 +241,32 @@ class MonitorService:
                     match_date=match_date_obj,
                     status=parsed_fixture["status"],
                     favorite_team_id=home_team.id,  # HOME team as favorite
-                    favorite_odds=None,  # No odds available
-                    should_monitor=True,  # Monitor ALL matches
+                    favorite_odds=None,
+                    should_monitor=True,
                     home_odds=None,
                     away_odds=None,
                     draw_odds=None,
                 )
-                db.add(match)
-                print(f"  ✅ Stored (temp mode): {home_team.name} vs {away_team.name} - monitoring home team")
+                db.add(match_home)
+                
+                # Record 2: AWAY as favorite (using different api_id to avoid conflict)
+                match_away = Match(
+                    api_id=parsed_fixture["api_id"] + 1000000,  # Offset to make unique
+                    league_id=league.id,
+                    home_team_id=home_team.id,
+                    away_team_id=away_team.id,
+                    match_date=match_date_obj,
+                    status=parsed_fixture["status"],
+                    favorite_team_id=away_team.id,  # AWAY team as favorite
+                    favorite_odds=None,
+                    should_monitor=True,
+                    home_odds=None,
+                    away_odds=None,
+                    draw_odds=None,
+                )
+                db.add(match_away)
+                
+                print(f"  ✅ Stored (temp mode): {home_team.name} vs {away_team.name} - monitoring BOTH teams")
                 return True
             
             return False
@@ -584,10 +603,16 @@ class MonitorService:
 
         print(f"👁️  Monitoring {len(matches)} matches...")
         
-        # Fetch live scores from The Odds API (all leagues at once)
-        print("🔄 Fetching live scores from The Odds API...")
-        live_scores = await self.odds_api.get_all_live_scores()
-        print(f"✅ Found {len(live_scores)} live matches in The Odds API")
+        # Try to fetch live scores (The Odds API preferred, API-Football as fallback)
+        print("🔄 Fetching live scores...")
+        live_scores = []
+        
+        try:
+            live_scores = await self.odds_api.get_all_live_scores()
+            print(f"✅ Found {len(live_scores)} live matches from The Odds API")
+        except Exception as e:
+            print(f"⚠️  The Odds API not available, using API-Football fallback")
+            # Will use API-Football direct queries for each match below
         
         alerts_sent = 0
 
@@ -616,6 +641,38 @@ class MonitorService:
                         break
                 
                 if not live_match:
+                    # Fallback: Try API-Football if The Odds API didn't have it
+                    if not live_scores:  # The Odds API failed, use API-Football
+                        try:
+                            # Use original api_id (not the +1000000 offset)
+                            real_api_id = match.api_id % 1000000
+                            live_data = await self.api_football.get_fixture_by_id(real_api_id)
+                            
+                            if live_data:
+                                parsed = self.api_football.parse_fixture(live_data)
+                                
+                                # Update match data
+                                match.status = parsed["status"]
+                                match.current_minute = parsed.get("current_minute")
+                                match.home_score = parsed.get("home_score") or 0
+                                match.away_score = parsed.get("away_score") or 0
+                                match.updated_at = datetime.utcnow()
+                                
+                                print(f"  📊 API-Football: {home_team.name} {match.home_score}-{match.away_score} {away_team.name} | Min: {match.current_minute}")
+                                
+                                # Check conditions
+                                if match.is_in_monitoring_window and match.is_favorite_losing:
+                                    print(f"  🚨 CONDITIONS MET! Sending alert...")
+                                    success = await self._send_alert(db, match)
+                                    if success:
+                                        match.notification_sent = True
+                                        match.notified_at = datetime.utcnow()
+                                        alerts_sent += 1
+                                        print(f"  ✅ Alert sent!")
+                                continue
+                        except Exception as e:
+                            print(f"  ⚠️  API-Football fallback failed: {e}")
+                    
                     print(f"  ⏭️  Not live yet: {home_team.name} vs {away_team.name}")
                     continue
                 

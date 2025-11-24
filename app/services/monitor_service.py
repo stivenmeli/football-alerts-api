@@ -38,11 +38,17 @@ class MonitorService:
             # Limpiar partidos antiguos
             await self._cleanup_old_matches(db)
             
-            # Obtener partidos CON cuotas desde The Odds API
-            print(f"🔄 Fetching matches with odds from The Odds API...")
-            all_odds = await self.odds_api.get_odds_for_soccer()
+            # TEMPORARY MODE: Use API-Football directly (The Odds API out of quota)
+            print(f"⚠️  TEMPORARY MODE: Fetching from API-Football (no odds filter)")
+            print(f"   Will monitor ALL matches - home team losing in minutes 52-65")
             
-            print(f"✅ Found {len(all_odds)} matches with odds")
+            # Try The Odds API first, fallback to API-Football
+            all_odds = []
+            try:
+                all_odds = await self.odds_api.get_odds_for_soccer()
+                print(f"✅ Found {len(all_odds)} matches with odds from The Odds API")
+            except:
+                print(f"⚠️  The Odds API not available, using API-Football fallback")
             
             # Filter only matches starting in the next 20 hours
             from datetime import timedelta, timezone
@@ -73,7 +79,46 @@ class MonitorService:
                     print(f"  ⚠️  Error parsing date: {e}")
                     continue
             
-            print(f"✅ Found {len(today_matches)} matches in next 20 hours")
+            print(f"✅ Found {len(today_matches)} matches in next 20 hours from The Odds API")
+            
+            # FALLBACK: If no odds available, fetch directly from API-Football
+            if len(today_matches) == 0:
+                print(f"🔄 No matches from The Odds API, fetching from API-Football...")
+                today_str = now_utc.strftime("%Y-%m-%d")
+                tomorrow_str = (now_utc + timedelta(days=1)).strftime("%Y-%m-%d")
+                
+                for date_str in [today_str, tomorrow_str]:
+                    try:
+                        api_fixtures = await self.api_football.get_fixtures_by_date(date_str, league_id=None)
+                        
+                        for fixture in api_fixtures:
+                            try:
+                                parsed = self.api_football.parse_fixture(fixture)
+                                
+                                # Filter by major leagues
+                                if parsed["league"]["api_id"] not in settings.leagues_to_monitor_list:
+                                    continue
+                                
+                                # Check if in window
+                                match_datetime_str = parsed.get("match_date")
+                                if match_datetime_str:
+                                    match_dt = datetime.fromisoformat(match_datetime_str.replace('+00:00', ''))
+                                    match_dt = match_dt.replace(tzinfo=timezone.utc)
+                                    
+                                    if now_utc <= match_dt <= window_end:
+                                        # Store directly from API-Football
+                                        success = await self._store_fixture_from_api_football(db, parsed)
+                                        if success:
+                                            count += 1
+                            except Exception as e:
+                                continue
+                                
+                    except Exception as e:
+                        print(f"⚠️  Error fetching {date_str}: {e}")
+                
+                print(f"✅ Stored {count} fixtures from API-Football (temporary mode)")
+                db.commit()
+                return count
             
             # Pre-fetch all API-Football fixtures for today and tomorrow to get real IDs
             # If API-Football is out of quota, we'll still store matches and try to get IDs during monitoring
@@ -125,6 +170,92 @@ class MonitorService:
         db.commit()
         return count
 
+    async def _store_fixture_from_api_football(self, db: Session, parsed_fixture: dict[str, Any]) -> bool:
+        """
+        Store fixture directly from API-Football (TEMPORARY MODE - no odds).
+        Marks ALL matches for monitoring, considers HOME team as favorite.
+        
+        Args:
+            db: Database session
+            parsed_fixture: Parsed fixture from API-Football
+            
+        Returns:
+            True if stored successfully
+        """
+        try:
+            # Get or create league
+            league_data = parsed_fixture["league"]
+            league = db.query(League).filter(League.api_id == league_data["api_id"]).first()
+            if not league:
+                league = League(
+                    api_id=league_data["api_id"],
+                    name=league_data["name"],
+                    country=league_data["country"],
+                    logo=league_data.get("logo"),
+                    season=datetime.now().year,
+                )
+                db.add(league)
+                db.flush()
+            
+            # Get or create home team
+            home_team_data = parsed_fixture["home_team"]
+            home_team = db.query(Team).filter(Team.api_id == home_team_data["api_id"]).first()
+            if not home_team:
+                home_team = Team(
+                    api_id=home_team_data["api_id"],
+                    name=home_team_data["name"],
+                    logo=home_team_data.get("logo"),
+                )
+                db.add(home_team)
+                db.flush()
+            
+            # Get or create away team
+            away_team_data = parsed_fixture["away_team"]
+            away_team = db.query(Team).filter(Team.api_id == away_team_data["api_id"]).first()
+            if not away_team:
+                away_team = Team(
+                    api_id=away_team_data["api_id"],
+                    name=away_team_data["name"],
+                    logo=away_team_data.get("logo"),
+                )
+                db.add(away_team)
+                db.flush()
+            
+            # Parse match date
+            match_date_str = parsed_fixture["match_date"]
+            match_date_obj = datetime.fromisoformat(match_date_str.replace('+00:00', '')).replace(tzinfo=None)
+            
+            # Check if match already exists
+            match = db.query(Match).filter(
+                Match.api_id == parsed_fixture["api_id"]
+            ).first()
+            
+            if not match:
+                # TEMPORARY MODE: Consider HOME team as favorite, monitor ALL matches
+                match = Match(
+                    api_id=parsed_fixture["api_id"],
+                    league_id=league.id,
+                    home_team_id=home_team.id,
+                    away_team_id=away_team.id,
+                    match_date=match_date_obj,
+                    status=parsed_fixture["status"],
+                    favorite_team_id=home_team.id,  # HOME team as favorite
+                    favorite_odds=None,  # No odds available
+                    should_monitor=True,  # Monitor ALL matches
+                    home_odds=None,
+                    away_odds=None,
+                    draw_odds=None,
+                )
+                db.add(match)
+                print(f"  ✅ Stored (temp mode): {home_team.name} vs {away_team.name} - monitoring home team")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"⚠️  Error storing fixture from API-Football: {e}")
+            return False
+    
     async def _store_fixture_from_odds(self, db: Session, odds_match: dict[str, Any], api_football_fixtures: dict[str, int], send_alert: bool = False) -> bool:
         """
         Store fixture from The Odds API data.

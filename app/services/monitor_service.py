@@ -294,10 +294,11 @@ class MonitorService:
             league_key = odds_match.get("league_key", "unknown")
             commence_time = odds_match.get("commence_time")
             
-            # Parse odds
+            # Parse odds (allow storing even without valid odds for debugging)
             parsed_odds = self.odds_api.parse_odds(odds_match)
+            
             if not parsed_odds:
-                return False
+                print(f"  ⚠️  No valid odds for {home_team_name} vs {away_team_name} - will store anyway for debugging")
             
             # Get or create league (using league_key as identifier)
             league = db.query(League).filter(League.name == league_key).first()
@@ -362,9 +363,22 @@ class MonitorService:
             ).first()
             
             if not match:
-                # Determine favorite
-                favorite_team_id = home_team.id if parsed_odds["favorite_team"] == "home" else away_team.id
-                should_monitor = parsed_odds["favorite_odds"] < settings.FAVORITE_ODDS_THRESHOLD
+                # Determine favorite (default to home if no odds)
+                if parsed_odds:
+                    favorite_team_id = home_team.id if parsed_odds["favorite_team"] == "home" else away_team.id
+                    should_monitor = parsed_odds["favorite_odds"] < settings.FAVORITE_ODDS_THRESHOLD
+                    home_odds = parsed_odds.get("home_odds")
+                    draw_odds = parsed_odds.get("draw_odds")
+                    away_odds = parsed_odds.get("away_odds")
+                    favorite_odds = parsed_odds.get("favorite_odds")
+                else:
+                    # No odds available - store for monitoring anyway (DEBUG MODE)
+                    favorite_team_id = home_team.id  # Default to home
+                    should_monitor = True  # Monitor all matches in debug mode
+                    home_odds = None
+                    draw_odds = None
+                    away_odds = None
+                    favorite_odds = None
                 
                 # Use real API-Football ID if found, otherwise use hash
                 api_id = real_api_id if real_api_id else hash(f"{home_team_name}{away_team_name}{commence_time}") % 1000000
@@ -376,28 +390,30 @@ class MonitorService:
                     away_team_id=away_team.id,
                     match_date=match_date_obj,
                     status="NS",  # Not Started
-                    home_odds=parsed_odds.get("home_odds"),
-                    draw_odds=parsed_odds.get("draw_odds"),
-                    away_odds=parsed_odds.get("away_odds"),
+                    home_odds=home_odds,
+                    draw_odds=draw_odds,
+                    away_odds=away_odds,
                     favorite_team_id=favorite_team_id,
-                    favorite_odds=parsed_odds.get("favorite_odds"),
+                    favorite_odds=favorite_odds,
                     should_monitor=should_monitor,
                 )
                 db.add(match)
                 db.flush()
                 
                 # Send alert if odds < threshold (only if send_alert=True)
-                if send_alert and should_monitor and not match.notification_sent:
+                if send_alert and parsed_odds and should_monitor and not match.notification_sent:
                     await self._send_low_odds_alert(db, match, home_team, away_team)
                 
-                print(f"✅ Stored: {home_team_name} vs {away_team_name} (odds: {parsed_odds['favorite_odds']:.2f})")
+                odds_text = f"(odds: {favorite_odds:.2f})" if favorite_odds else "(sin cuotas)"
+                print(f"✅ Stored: {home_team_name} vs {away_team_name} {odds_text}")
                 return True
             else:
-                # Update existing match odds
-                match.home_odds = parsed_odds.get("home_odds")
-                match.draw_odds = parsed_odds.get("draw_odds")
-                match.away_odds = parsed_odds.get("away_odds")
-                match.favorite_odds = parsed_odds.get("favorite_odds")
+                # Update existing match odds (only if we have valid odds)
+                if parsed_odds:
+                    match.home_odds = parsed_odds.get("home_odds")
+                    match.draw_odds = parsed_odds.get("draw_odds")
+                    match.away_odds = parsed_odds.get("away_odds")
+                    match.favorite_odds = parsed_odds.get("favorite_odds")
                 return True
                 
         except Exception as e:

@@ -157,6 +157,140 @@ async def get_matches(
     }
 
 
+@router.get("/api-quotas")
+async def check_api_quotas() -> dict[str, Any]:
+    """Check current API quotas for API-Football and The Odds API."""
+    import httpx
+    
+    quotas = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "api_football": {},
+        "the_odds_api": {}
+    }
+    
+    # 1. Check API-Football quota
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                "https://v3.football.api-sports.io/status",
+                headers={"x-apisports-key": settings.API_FOOTBALL_KEY}
+            )
+            data = response.json()
+            
+            if data.get("response"):
+                account = data["response"]["account"]
+                requests_data = data["response"]["requests"]
+                
+                used = requests_data.get("current", 0)
+                limit = requests_data.get("limit_day", 100)
+                available = limit - used
+                
+                quotas["api_football"] = {
+                    "status": "✅ Conectado",
+                    "plan": account.get("plan", "Free"),
+                    "email": account.get("email", "N/A"),
+                    "requests_used": used,
+                    "requests_limit": limit,
+                    "requests_available": available,
+                    "percentage_used": round((used / limit * 100), 1) if limit > 0 else 0,
+                    "quota_status": "❌ AGOTADA" if used >= limit else f"✅ Disponible ({available} restantes)",
+                    "resets_at": "00:00 UTC (7 PM Colombia)"
+                }
+            else:
+                quotas["api_football"] = {
+                    "status": "❌ Error",
+                    "error": data.get("errors", "Unknown error")
+                }
+    except Exception as e:
+        quotas["api_football"] = {
+            "status": "❌ Error de conexión",
+            "error": str(e)
+        }
+    
+    # 2. Check The Odds API (intentar una consulta para ver si responde)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            # Intentar obtener deportes disponibles (endpoint ligero)
+            response = await client.get(
+                "https://api.the-odds-api.com/v4/sports",
+                params={"apiKey": settings.THE_ODDS_API_KEY}
+            )
+            
+            # The Odds API devuelve las requests restantes en los headers
+            remaining = response.headers.get("x-requests-remaining", "Unknown")
+            used = response.headers.get("x-requests-used", "Unknown")
+            
+            if response.status_code == 200:
+                quotas["the_odds_api"] = {
+                    "status": "✅ Conectado",
+                    "plan": "Free (500 requests/mes)",
+                    "requests_used": used,
+                    "requests_remaining": remaining,
+                    "quota_status": "❌ AGOTADA" if remaining == "0" else f"✅ Disponible ({remaining} restantes)",
+                    "resets_at": "1 de cada mes"
+                }
+            elif response.status_code == 401:
+                quotas["the_odds_api"] = {
+                    "status": "❌ API Key inválida",
+                    "error": "La API Key no es válida o ha expirado"
+                }
+            elif response.status_code == 429:
+                quotas["the_odds_api"] = {
+                    "status": "❌ CUOTA AGOTADA",
+                    "error": "Has alcanzado el límite mensual de 500 requests",
+                    "resets_at": "1 de cada mes"
+                }
+            else:
+                quotas["the_odds_api"] = {
+                    "status": f"❌ Error HTTP {response.status_code}",
+                    "error": response.text[:200]
+                }
+    except Exception as e:
+        quotas["the_odds_api"] = {
+            "status": "❌ Error de conexión",
+            "error": str(e)
+        }
+    
+    # 3. Calcular tiempo hasta próximo reset
+    now_utc = datetime.now(timezone.utc)
+    
+    # API-Football se resetea a las 00:00 UTC
+    next_reset_api_football = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    if now_utc.hour >= 0:
+        next_reset_api_football += timedelta(days=1)
+    hours_until_api_football = (next_reset_api_football - now_utc).total_seconds() / 3600
+    
+    # The Odds API se resetea el día 1 de cada mes
+    if now_utc.day == 1:
+        next_reset_the_odds = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if now_utc.month == 12:
+            next_reset_the_odds = next_reset_the_odds.replace(year=now_utc.year + 1, month=1)
+        else:
+            next_reset_the_odds = next_reset_the_odds.replace(month=now_utc.month + 1)
+    else:
+        next_reset_the_odds = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if now_utc.month == 12:
+            next_reset_the_odds = next_reset_the_odds.replace(year=now_utc.year + 1, month=1)
+        else:
+            next_reset_the_odds = next_reset_the_odds.replace(month=now_utc.month + 1)
+    
+    days_until_the_odds = (next_reset_the_odds - now_utc).days
+    
+    quotas["next_resets"] = {
+        "api_football": {
+            "time": next_reset_api_football.isoformat(),
+            "hours_until": round(hours_until_api_football, 1),
+            "local_time": f"{int(hours_until_api_football) // 1} horas"
+        },
+        "the_odds_api": {
+            "date": next_reset_the_odds.date().isoformat(),
+            "days_until": days_until_the_odds
+        }
+    }
+    
+    return quotas
+
+
 @router.get("/env-check")
 async def check_environment() -> dict[str, Any]:
     """Check environment variables configuration (for debugging)."""

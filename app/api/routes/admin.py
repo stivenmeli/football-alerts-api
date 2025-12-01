@@ -37,6 +37,51 @@ async def manual_fetch_odds(db: Session = Depends(get_db)) -> dict[str, Any]:
     }
 
 
+@router.post("/update-monitoring-threshold")
+async def update_monitoring_threshold(threshold: float, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """
+    Actualizar manualmente qué partidos monitorear basado en un threshold temporal.
+    Útil para testing sin cambiar la configuración de Railway.
+    """
+    from app.models import Match
+    
+    # Obtener todos los partidos con cuotas
+    matches = db.query(Match).filter(Match.favorite_odds != None).all()
+    
+    updated_count = 0
+    newly_monitored = []
+    
+    for match in matches:
+        old_should_monitor = match.should_monitor
+        new_should_monitor = match.favorite_odds <= threshold
+        
+        if old_should_monitor != new_should_monitor:
+            match.should_monitor = new_should_monitor
+            updated_count += 1
+            
+            if new_should_monitor:
+                # Get team names for display
+                from app.models import Team
+                home_team = db.query(Team).filter(Team.id == match.home_team_id).first()
+                away_team = db.query(Team).filter(Team.id == match.away_team_id).first()
+                
+                newly_monitored.append({
+                    "home": home_team.name if home_team else "Unknown",
+                    "away": away_team.name if away_team else "Unknown",
+                    "odds": match.favorite_odds
+                })
+    
+    db.commit()
+    
+    return {
+        "status": "success",
+        "threshold_used": threshold,
+        "matches_updated": updated_count,
+        "newly_monitored": newly_monitored,
+        "message": f"Updated {updated_count} matches with threshold {threshold}"
+    }
+
+
 @router.post("/monitor-matches")
 async def manual_monitor(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Manually check live matches and send alerts."""

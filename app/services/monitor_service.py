@@ -366,7 +366,7 @@ class MonitorService:
                 # Determine favorite (default to home if no odds)
                 if parsed_odds:
                     favorite_team_id = home_team.id if parsed_odds["favorite_team"] == "home" else away_team.id
-                    should_monitor = parsed_odds["favorite_odds"] < settings.FAVORITE_ODDS_THRESHOLD
+                    should_monitor = parsed_odds["favorite_odds"] <= settings.FAVORITE_ODDS_THRESHOLD
                     home_odds = parsed_odds.get("home_odds")
                     draw_odds = parsed_odds.get("draw_odds")
                     away_odds = parsed_odds.get("away_odds")
@@ -570,8 +570,8 @@ class MonitorService:
                     else:
                         match.favorite_team_id = away_team.id
                     
-                    # Check if favorite odds < threshold and send alert
-                    if match.favorite_odds and match.favorite_odds < settings.FAVORITE_ODDS_THRESHOLD:
+                    # Check if favorite odds <= threshold and send alert
+                    if match.favorite_odds and match.favorite_odds <= settings.FAVORITE_ODDS_THRESHOLD:
                         match.should_monitor = True
                         print(f"🎯 Match marked for monitoring: {home_team.name} vs {away_team.name} (odds: {match.favorite_odds})")
                         

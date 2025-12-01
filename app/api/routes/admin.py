@@ -202,6 +202,67 @@ async def get_matches(
     }
 
 
+@router.get("/match-details/{match_id}")
+async def get_match_details(match_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Get detailed information about a specific match for debugging."""
+    match = db.query(Match).filter(Match.id == match_id).first()
+    
+    if not match:
+        return {"error": "Match not found"}
+    
+    home_team = db.query(Team).filter(Team.id == match.home_team_id).first()
+    away_team = db.query(Team).filter(Team.id == match.away_team_id).first()
+    favorite_team = db.query(Team).filter(Team.id == match.favorite_team_id).first() if match.favorite_team_id else None
+    league = db.query(League).filter(League.id == match.league_id).first()
+    
+    return {
+        "id": match.id,
+        "api_id": match.api_id,
+        "is_real_api_football_id": match.api_id < 1000000,
+        "home_team": {
+            "id": home_team.id if home_team else None,
+            "name": home_team.name if home_team else None,
+            "api_id": home_team.api_id if home_team else None
+        },
+        "away_team": {
+            "id": away_team.id if away_team else None,
+            "name": away_team.name if away_team else None,
+            "api_id": away_team.api_id if away_team else None
+        },
+        "favorite_team": {
+            "name": favorite_team.name if favorite_team else None,
+            "id": match.favorite_team_id
+        },
+        "league": {
+            "name": league.name if league else None,
+            "api_id": league.api_id if league else None
+        },
+        "match_date": match.match_date.isoformat() if match.match_date else None,
+        "status": match.status,
+        "scores": {
+            "home": match.home_score,
+            "away": match.away_score
+        },
+        "current_minute": match.current_minute,
+        "odds": {
+            "home": match.home_odds,
+            "draw": match.draw_odds,
+            "away": match.away_odds,
+            "favorite": match.favorite_odds
+        },
+        "monitoring": {
+            "should_monitor": match.should_monitor,
+            "notification_sent": match.notification_sent,
+            "notified_at": match.notified_at.isoformat() if match.notified_at else None,
+            "monitoring_window": f"{settings.MONITOR_MINUTE_START}-{settings.MONITOR_MINUTE_END}"
+        },
+        "timestamps": {
+            "created_at": match.created_at.isoformat() if match.created_at else None,
+            "updated_at": match.updated_at.isoformat() if match.updated_at else None
+        }
+    }
+
+
 @router.get("/api-quotas")
 async def check_api_quotas() -> dict[str, Any]:
     """Check current API quotas for API-Football and The Odds API."""

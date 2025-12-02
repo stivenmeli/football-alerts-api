@@ -210,36 +210,33 @@ async def test_alert_simulation(
     from app.models import League, Team
     
     try:
-        # 1. Crear o obtener liga de prueba
-        test_league = db.query(League).filter(League.name == "TEST_LEAGUE").first()
-        if not test_league:
-            test_league = League(
-                api_id=999999,
-                name="TEST_LEAGUE",
-                country="Test",
-                season=2025
-            )
-            db.add(test_league)
-            db.flush()
+        # 0. Limpiar datos de prueba anteriores
+        db.query(Match).filter(Match.api_id >= 999990).delete()
+        db.query(Team).filter(Team.api_id >= 999990).delete()
+        db.query(League).filter(League.api_id >= 999990).delete()
+        db.commit()
         
-        # 2. Crear o obtener equipos de prueba
-        home = db.query(Team).filter(Team.name == home_team).first()
-        if not home:
-            home = Team(api_id=999998, name=home_team)
-            db.add(home)
-            db.flush()
+        # 1. Crear liga de prueba
+        test_league = League(
+            api_id=999999,
+            name="TEST_LEAGUE",
+            country="Test",
+            season=2025
+        )
+        db.add(test_league)
+        db.flush()
         
-        away = db.query(Team).filter(Team.name == away_team).first()
-        if not away:
-            away = Team(api_id=999997, name=away_team)
-            db.add(away)
-            db.flush()
+        # 2. Crear equipos de prueba
+        home = Team(api_id=999998, name=home_team)
+        db.add(home)
+        db.flush()
+        
+        away = Team(api_id=999997, name=away_team)
+        db.add(away)
+        db.flush()
         
         # 3. Crear partido de prueba
         from datetime import datetime, timezone
-        
-        # Eliminar partido de prueba anterior si existe
-        db.query(Match).filter(Match.api_id == 999996).delete()
         
         test_match = Match(
             api_id=999996,

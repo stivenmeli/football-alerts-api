@@ -62,8 +62,10 @@ class Match(Base):
     
     @property
     def is_in_monitoring_window(self) -> bool:
-        """Check if match is in the monitoring window (minute 55-62)."""
+        """Check if match is in the monitoring window (configurable via settings)."""
+        from app.core.config import settings
+        
         if not self.current_minute:
             return False
-        return 55 <= self.current_minute <= 62
+        return settings.MONITOR_MINUTE_START <= self.current_minute <= settings.MONITOR_MINUTE_END
 

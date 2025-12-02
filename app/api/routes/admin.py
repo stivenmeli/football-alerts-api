@@ -184,6 +184,138 @@ async def test_alert_simulation(
     return result
 
 
+@router.post("/test-alert")
+async def test_alert_simulation(
+    home_team: str = "Test Home Team",
+    away_team: str = "Test Away Team", 
+    home_score: int = 0,
+    away_score: int = 2,
+    current_minute: int = 60,
+    favorite_is_home: bool = True,
+    favorite_odds: float = 1.30,
+    db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """
+    Simular un partido en vivo para probar el sistema de alertas.
+    
+    Parámetros:
+    - home_team: Nombre del equipo local
+    - away_team: Nombre del equipo visitante
+    - home_score: Goles del local
+    - away_score: Goles del visitante
+    - current_minute: Minuto actual del partido
+    - favorite_is_home: True si el favorito es el local
+    - favorite_odds: Cuota del favorito
+    """
+    from app.models import League, Team
+    
+    try:
+        # 1. Crear o obtener liga de prueba
+        test_league = db.query(League).filter(League.name == "TEST_LEAGUE").first()
+        if not test_league:
+            test_league = League(
+                api_id=999999,
+                name="TEST_LEAGUE",
+                country="Test",
+                season=2025
+            )
+            db.add(test_league)
+            db.flush()
+        
+        # 2. Crear o obtener equipos de prueba
+        home = db.query(Team).filter(Team.name == home_team).first()
+        if not home:
+            home = Team(api_id=999998, name=home_team)
+            db.add(home)
+            db.flush()
+        
+        away = db.query(Team).filter(Team.name == away_team).first()
+        if not away:
+            away = Team(api_id=999997, name=away_team)
+            db.add(away)
+            db.flush()
+        
+        # 3. Crear partido de prueba
+        from datetime import datetime, timezone
+        
+        # Eliminar partido de prueba anterior si existe
+        db.query(Match).filter(Match.api_id == 999996).delete()
+        
+        test_match = Match(
+            api_id=999996,
+            league_id=test_league.id,
+            home_team_id=home.id,
+            away_team_id=away.id,
+            match_date=datetime.now(timezone.utc),
+            status="LIVE",
+            home_score=home_score,
+            away_score=away_score,
+            current_minute=current_minute,
+            home_odds=2.0 if not favorite_is_home else favorite_odds,
+            away_odds=2.0 if favorite_is_home else favorite_odds,
+            draw_odds=3.0,
+            favorite_team_id=home.id if favorite_is_home else away.id,
+            favorite_odds=favorite_odds,
+            should_monitor=True,
+            notification_sent=False
+        )
+        db.add(test_match)
+        db.commit()
+        
+        # 4. Verificar condiciones
+        is_in_window = test_match.is_in_monitoring_window
+        is_losing = test_match.is_favorite_losing
+        
+        result = {
+            "test_match_created": True,
+            "match_id": test_match.id,
+            "scenario": {
+                "home_team": home_team,
+                "away_team": away_team,
+                "score": f"{home_score} - {away_score}",
+                "minute": current_minute,
+                "favorite": home_team if favorite_is_home else away_team,
+                "favorite_odds": favorite_odds
+            },
+            "conditions": {
+                "in_monitoring_window": is_in_window,
+                "window_range": f"{settings.MONITOR_MINUTE_START}-{settings.MONITOR_MINUTE_END}",
+                "favorite_is_losing": is_losing,
+                "both_conditions_met": is_in_window and is_losing
+            },
+            "alert_sent": False,
+            "message": ""
+        }
+        
+        # 5. Ejecutar monitoreo
+        if is_in_window and is_losing:
+            monitor = MonitorService()
+            alerts = await monitor.monitor_live_matches(db)
+            
+            # Refrescar para ver si se marcó como notificado
+            db.refresh(test_match)
+            
+            result["alert_sent"] = test_match.notification_sent
+            result["message"] = f"✅ Se enviaron {alerts} alerta(s)" if alerts > 0 else "❌ No se envió alerta"
+        else:
+            reasons = []
+            if not is_in_window:
+                reasons.append(f"Minuto {current_minute} está FUERA de ventana {settings.MONITOR_MINUTE_START}-{settings.MONITOR_MINUTE_END}")
+            if not is_losing:
+                reasons.append("El favorito NO está perdiendo")
+            
+            result["message"] = f"⚠️ Condiciones no cumplidas: {', '.join(reasons)}"
+        
+        return result
+        
+    except Exception as e:
+        db.rollback()
+        return {
+            "error": str(e),
+            "message": "❌ Error al crear partido de prueba"
+        }
+
+
 @router.post("/monitor-matches")
 async def manual_monitor(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Manually check live matches and send alerts."""

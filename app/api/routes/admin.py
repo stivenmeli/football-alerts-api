@@ -82,6 +82,108 @@ async def update_monitoring_threshold(threshold: float, db: Session = Depends(ge
     }
 
 
+@router.post("/test-alert-simulation")
+async def test_alert_simulation(
+    match_id: int,
+    home_score: int,
+    away_score: int,
+    current_minute: int,
+    db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """
+    Simula un escenario de partido en vivo para probar el sistema de alertas.
+    
+    Args:
+        match_id: ID del partido a simular
+        home_score: Goles del equipo local
+        away_score: Goles del equipo visitante
+        current_minute: Minuto actual del partido
+    """
+    from app.services.monitor_service import MonitorService
+    from app.models import Team, League
+    
+    # Obtener el partido
+    match = db.query(Match).filter(Match.id == match_id).first()
+    
+    if not match:
+        return {"error": f"Match with ID {match_id} not found"}
+    
+    # Obtener información de equipos
+    home_team = db.query(Team).filter(Team.id == match.home_team_id).first()
+    away_team = db.query(Team).filter(Team.id == match.away_team_id).first()
+    favorite_team = db.query(Team).filter(Team.id == match.favorite_team_id).first()
+    
+    if not all([home_team, away_team, favorite_team]):
+        return {"error": "Could not load team information"}
+    
+    # Guardar estado original
+    original_status = match.status
+    original_minute = match.current_minute
+    original_home_score = match.home_score
+    original_away_score = match.away_score
+    original_notification_sent = match.notification_sent
+    
+    # Simular estado en vivo
+    match.status = "LIVE"
+    match.current_minute = current_minute
+    match.home_score = home_score
+    match.away_score = away_score
+    
+    # Verificar condiciones
+    in_window = match.is_in_monitoring_window
+    is_losing = match.is_favorite_losing
+    
+    result = {
+        "simulation": {
+            "match": f"{home_team.name} vs {away_team.name}",
+            "favorite": favorite_team.name,
+            "favorite_odds": match.favorite_odds,
+            "score": f"{home_score} - {away_score}",
+            "minute": current_minute,
+            "status": "LIVE (simulado)"
+        },
+        "conditions": {
+            "monitoring_window": f"{settings.MONITOR_MINUTE_START}-{settings.MONITOR_MINUTE_END}",
+            "current_minute": current_minute,
+            "in_window": in_window,
+            "favorite_is_losing": is_losing,
+            "should_alert": in_window and is_losing
+        },
+        "alert_sent": False,
+        "message": ""
+    }
+    
+    # Si se cumplen las condiciones, enviar alerta REAL
+    if in_window and is_losing and not original_notification_sent:
+        monitor = MonitorService()
+        success = await monitor._send_alert(db, match)
+        
+        if success:
+            result["alert_sent"] = True
+            result["message"] = "✅ ¡ALERTA ENVIADA CON ÉXITO! Revisa tu Telegram."
+            # NO marcar como notificado para poder probar de nuevo
+            match.notification_sent = False
+        else:
+            result["message"] = "❌ Error al enviar alerta"
+    elif not in_window:
+        result["message"] = f"⏱️ Minuto {current_minute} fuera de ventana ({settings.MONITOR_MINUTE_START}-{settings.MONITOR_MINUTE_END})"
+    elif not is_losing:
+        result["message"] = f"✅ {favorite_team.name} (favorito) NO está perdiendo"
+    else:
+        result["message"] = "ℹ️ Condiciones no cumplidas"
+    
+    # Restaurar estado original
+    match.status = original_status
+    match.current_minute = original_minute
+    match.home_score = original_home_score
+    match.away_score = original_away_score
+    match.notification_sent = original_notification_sent
+    
+    db.commit()
+    
+    return result
+
+
 @router.post("/monitor-matches")
 async def manual_monitor(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Manually check live matches and send alerts."""

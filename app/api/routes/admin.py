@@ -210,15 +210,17 @@ async def test_alert_simulation(
     from app.models import League, Team
     
     try:
-        # 0. Limpiar datos de prueba anteriores
-        db.query(Match).filter(Match.api_id >= 999990).delete()
-        db.query(Team).filter(Team.api_id >= 999990).delete()
-        db.query(League).filter(League.api_id >= 999990).delete()
+        # 0. Limpiar datos de prueba anteriores (IDs muy altos para evitar conflictos)
+        TEST_API_ID_BASE = 99999990  # IDs que NO existen en API-Football
+        
+        db.query(Match).filter(Match.api_id >= TEST_API_ID_BASE).delete()
+        db.query(Team).filter(Team.api_id >= TEST_API_ID_BASE).delete()
+        db.query(League).filter(League.api_id >= TEST_API_ID_BASE).delete()
         db.commit()
         
         # 1. Crear liga de prueba
         test_league = League(
-            api_id=999999,
+            api_id=TEST_API_ID_BASE + 9,
             name="TEST_LEAGUE",
             country="Test",
             season=2025
@@ -227,11 +229,11 @@ async def test_alert_simulation(
         db.flush()
         
         # 2. Crear equipos de prueba
-        home = Team(api_id=999998, name=home_team)
+        home = Team(api_id=TEST_API_ID_BASE + 8, name=home_team)
         db.add(home)
         db.flush()
         
-        away = Team(api_id=999997, name=away_team)
+        away = Team(api_id=TEST_API_ID_BASE + 7, name=away_team)
         db.add(away)
         db.flush()
         
@@ -239,7 +241,7 @@ async def test_alert_simulation(
         from datetime import datetime, timezone
         
         test_match = Match(
-            api_id=999996,
+            api_id=TEST_API_ID_BASE + 6,  # ID muy alto que NO existe en API-Football
             league_id=test_league.id,
             home_team_id=home.id,
             away_team_id=away.id,

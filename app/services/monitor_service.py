@@ -657,37 +657,50 @@ class MonitorService:
                         break
                 
                 if not live_match:
-                    # Fallback: Try API-Football if The Odds API didn't have it
-                    if not live_scores:  # The Odds API failed, use API-Football
-                        try:
-                            # Use original api_id (not the +1000000 offset)
-                            real_api_id = match.api_id % 1000000
-                            live_data = await self.api_football.get_fixture_by_id(real_api_id)
+                    # Fallback: ALWAYS try API-Football if The Odds API didn't have this specific match
+                    # This is critical because The Odds API may return other matches but not this one
+                    print(f"  ⚠️  Match not found in The Odds API live scores, trying API-Football...")
+                    try:
+                        # Check if api_id looks like a real API-Football ID (< 1000000)
+                        if match.api_id >= 1000000:
+                            print(f"  ⚠️  Match has hash ID ({match.api_id}), cannot use API-Football")
+                            print(f"  ⏭️  Not live yet: {home_team.name} vs {away_team.name}")
+                            continue
+                        
+                        # Use API-Football to get live data
+                        live_data = await self.api_football.get_fixture_by_id(match.api_id)
+                        
+                        if live_data:
+                            parsed = self.api_football.parse_fixture(live_data)
                             
-                            if live_data:
-                                parsed = self.api_football.parse_fixture(live_data)
-                                
-                                # Update match data
-                                match.status = parsed["status"]
-                                match.current_minute = parsed.get("current_minute")
-                                match.home_score = parsed.get("home_score") or 0
-                                match.away_score = parsed.get("away_score") or 0
-                                match.updated_at = datetime.utcnow()
-                                
-                                print(f"  📊 API-Football: {home_team.name} {match.home_score}-{match.away_score} {away_team.name} | Min: {match.current_minute}")
-                                
-                                # Check conditions
-                                if match.is_in_monitoring_window and match.is_favorite_losing:
-                                    print(f"  🚨 CONDITIONS MET! Sending alert...")
-                                    success = await self._send_alert(db, match)
-                                    if success:
-                                        match.notification_sent = True
-                                        match.notified_at = datetime.utcnow()
-                                        alerts_sent += 1
-                                        print(f"  ✅ Alert sent!")
-                                continue
-                        except Exception as e:
-                            print(f"  ⚠️  API-Football fallback failed: {e}")
+                            # Update match data
+                            match.status = parsed["status"]
+                            match.current_minute = parsed.get("current_minute")
+                            match.home_score = parsed.get("home_score") or 0
+                            match.away_score = parsed.get("away_score") or 0
+                            match.updated_at = datetime.utcnow()
+                            
+                            print(f"  📊 API-Football FALLBACK: {home_team.name} {match.home_score}-{match.away_score} {away_team.name} | Min: {match.current_minute} | Status: {match.status}")
+                            
+                            # Check conditions
+                            if match.is_in_monitoring_window and match.is_favorite_losing:
+                                print(f"  🚨 CONDITIONS MET! Sending alert...")
+                                success = await self._send_alert(db, match)
+                                if success:
+                                    match.notification_sent = True
+                                    match.notified_at = datetime.utcnow()
+                                    alerts_sent += 1
+                                    print(f"  ✅ Alert sent!")
+                            else:
+                                if match.current_minute:
+                                    in_window = match.is_in_monitoring_window
+                                    is_losing = match.is_favorite_losing
+                                    print(f"  ℹ️  Not alerting: In window={in_window} (need {settings.MONITOR_MINUTE_START}-{settings.MONITOR_MINUTE_END}), Losing={is_losing}")
+                            continue
+                        else:
+                            print(f"  ⚠️  API-Football returned no data for ID {match.api_id}")
+                    except Exception as e:
+                        print(f"  ⚠️  API-Football fallback failed: {e}")
                     
                     print(f"  ⏭️  Not live yet: {home_team.name} vs {away_team.name}")
                     continue

@@ -661,6 +661,27 @@ class MonitorService:
                     # This is critical because The Odds API may return other matches but not this one
                     print(f"  ⚠️  Match not found in The Odds API live scores, trying API-Football...")
                     try:
+                        # Special handling for TEST matches (api_id >= 99999990)
+                        # These already have simulated data in DB, just check conditions
+                        if match.api_id >= 99999990:
+                            print(f"  🧪 TEST MATCH: Using existing DB data")
+                            print(f"  📊 TEST: {home_team.name} {match.home_score}-{match.away_score} {away_team.name} | Min: {match.current_minute} | Status: {match.status}")
+                            
+                            # Check conditions with existing data
+                            if match.is_in_monitoring_window and match.is_favorite_losing:
+                                print(f"  🚨 CONDITIONS MET! Sending alert...")
+                                success = await self._send_alert(db, match)
+                                if success:
+                                    match.notification_sent = True
+                                    match.notified_at = datetime.utcnow()
+                                    alerts_sent += 1
+                                    print(f"  ✅ Alert sent!")
+                            else:
+                                in_window = match.is_in_monitoring_window
+                                is_losing = match.is_favorite_losing
+                                print(f"  ℹ️  Not alerting: In window={in_window} (need {settings.MONITOR_MINUTE_START}-{settings.MONITOR_MINUTE_END}), Losing={is_losing}")
+                            continue
+                        
                         # Check if api_id looks like a real API-Football ID (< 1000000)
                         if match.api_id >= 1000000:
                             print(f"  ⚠️  Match has hash ID ({match.api_id}), cannot use API-Football")
